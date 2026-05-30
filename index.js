@@ -326,6 +326,73 @@ app.post('/scrape-tma', async (req, res) => {
 })
 
 const PORT = process.env.PORT || 3001
+app.post('/debug-login', async (req, res) => {
+  const { matric, password, secret } = req.body
+
+  if (secret !== SECRET_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' })
+  }
+
+  let cookies = ''
+
+  try {
+    const loginPage = await httpFetch('https://elearn.nou.edu.ng/login/index.php')
+    const setCookie = loginPage.headers['set-cookie']
+    if (setCookie) {
+      cookies = setCookie.map(c => c.split(';')[0]).join('; ')
+    }
+
+    const loginToken = extractLoginToken(loginPage.body)
+
+    const loginBody = new URLSearchParams({
+      username: matric,
+      password: password,
+      logintoken: loginToken,
+      anchor: ''
+    }).toString()
+
+    const loginRes = await httpFetch('https://elearn.nou.edu.ng/login/index.php', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': cookies,
+        'Referer': 'https://elearn.nou.edu.ng/login/index.php'
+      },
+      body: loginBody
+    })
+
+    const loginCookies = loginRes.headers['set-cookie']
+    if (loginCookies) {
+      const newCookies = loginCookies.map(c => c.split(';')[0])
+      const cookieMap = new Map(cookies.split('; ').filter(Boolean).map(c => {
+        const idx = c.indexOf('=')
+        return [c.slice(0, idx), c.slice(idx + 1)]
+      }))
+      newCookies.forEach(c => {
+        const idx = c.indexOf('=')
+        cookieMap.set(c.slice(0, idx), c.slice(idx + 1))
+      })
+      cookies = Array.from(cookieMap.entries()).map(([k, v]) => `${k}=${v}`).join('; ')
+    }
+
+    const dashboardRes = await httpFetch('https://elearn.nou.edu.ng/my/', {
+      headers: { 'Cookie': cookies }
+    })
+
+    // Return first 5000 chars of dashboard HTML so we can see what's there
+    return res.json({
+      status: dashboardRes.status,
+      loginFailed: loginRes.body.includes('loginerrormessage'),
+      dashboardSnippet: dashboardRes.body.slice(0, 5000),
+      quizLinksFound: (dashboardRes.body.match(/mod\/quiz/g) || []).length,
+      tmaLinksFound: (dashboardRes.body.match(/tma/gi) || []).length
+    })
+
+  } catch (err) {
+    return res.status(500).json({ error: err.message })
+  }
+})
+
 app.listen(PORT, () => {
   console.log(`NOUN Scraper running on port ${PORT}`)
 })
