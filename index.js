@@ -54,7 +54,7 @@ function extractLoginToken(html) {
   return match ? match[1] : ''
 }
 
-function extractQuizLinks(html, roundNumber) {
+/*function extractQuizLinks(html, roundNumber) {
   const links = []
   const linkRegex = /href="(https:\/\/elearn\.nou\.edu\.ng\/mod\/quiz\/[^"]+)">([^<]+)</g
   let match
@@ -66,6 +66,44 @@ function extractQuizLinks(html, roundNumber) {
     }
   }
   return [...new Map(links.map(l => [l.href, l])).values()].slice(0, 30)
+}*/
+function extractQuizLinks(html, roundNumber) {
+  const links = []
+
+  // match ALL quiz links (absolute + relative)
+  const linkRegex = /href="([^"]*\/mod\/quiz\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/g
+
+  let match
+  while ((match = linkRegex.exec(html)) !== null) {
+    const href = match[1]
+    const text = match[2].replace(/<[^>]*>/g, '').trim()
+    const lower = text.toLowerCase()
+
+    // MUCH LOOSER matching (important)
+    const isQuiz =
+      lower.includes('quiz') ||
+      lower.includes('tma') ||
+      lower.includes('assignment') ||
+      lower.includes('assessment')
+
+    const matchesRound =
+      roundNumber === '1'
+        ? lower.includes('1') || lower.includes('i')
+        : lower.includes(roundNumber)
+
+    if (isQuiz && matchesRound) {
+      const fullUrl = href.startsWith('http')
+        ? href
+        : `https://elearn.nou.edu.ng${href}`
+
+      links.push({
+        href: fullUrl,
+        text
+      })
+    }
+  }
+
+  return [...new Map(links.map(l => [l.href, l])).values()]
 }
 
 function extractCourseCode(html) {
