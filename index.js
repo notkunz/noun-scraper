@@ -4,45 +4,17 @@ const cors = require('cors')
 
 const app = express()
 app.use(express.json())
-app.use(cors({
-  origin: [
-    'https://noun-tma-assistant-two.vercel.app',
-    'http://localhost:3000'
-  ]
-}))
+app.use(cors())
 
-// Secret key so only your app can call this server
-const SECRET_KEY = process.env.SCRAPER_SECRET || 'noun-tma-secret-key'
+const SECRET_KEY = process.env.SCRAPER_SECRET || 'noun-tma-secret-2024-olakunle'
 
 app.get('/', (req, res) => {
   res.json({ status: 'NOUN Scraper running' })
 })
 
-// Add at top of /scrape-tma route handler
-const SCRAPE_TIMEOUT = 120000 // 2 minutes
-
-// Wrap browser operations in a promise with timeout
-const scrapeWithTimeout = new Promise(async (resolve, reject) => {
-  const timer = setTimeout(() => {
-    reject(new Error('Scraping timed out after 2 minutes'))
-  }, SCRAPE_TIMEOUT)
-
-  try {
-    // ... all your browser code here
-    clearTimeout(timer)
-    resolve(results)
-  } catch (err) {
-    clearTimeout(timer)
-    reject(err)
-  }
-})
-
-const results = await scrapeWithTimeout
-
 app.post('/scrape-tma', async (req, res) => {
-  const { matric, password, secret } = req.body
+  const { matric, password, secret, tma_round } = req.body
 
-  // Verify secret key
   if (secret !== SECRET_KEY) {
     return res.status(401).json({ error: 'Unauthorized' })
   }
@@ -51,112 +23,117 @@ app.post('/scrape-tma', async (req, res) => {
     return res.status(400).json({ error: 'Matric and password required' })
   }
 
+  const roundNumber = tma_round?.replace('TMA', '') || '1'
   let browser = null
 
   try {
-    console.log(`Starting scrape for ${matric}`)
+    console.log(`Starting scrape for ${matric} — ${tma_round}`)
 
-browser = await puppeteer.launch({
-  headless: 'new',
-  args: [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage',
-    '--disable-gpu',
-    '--no-first-run',
-    '--no-zygote',
-    '--single-process',
-    '--disable-extensions',
-    '--disable-background-networking',
-    '--disable-sync',
-    '--disable-translate',
-    '--hide-scrollbars',
-    '--metrics-recording-only',
-    '--mute-audio',
-    '--no-first-run',
-    '--safebrowsing-disable-auto-update',
-    '--js-flags=--max-old-space-size=256'
-  ]
-})
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-first-run',
+        '--no-zygote',
+        '--single-process',
+        '--disable-extensions',
+        '--disable-background-networking',
+        '--disable-sync',
+        '--disable-translate',
+        '--hide-scrollbars',
+        '--mute-audio',
+        '--safebrowsing-disable-auto-update',
+        '--js-flags=--max-old-space-size=256'
+      ]
+    })
 
     const page = await browser.newPage()
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    await page.setViewport({ width: 1280, height: 800 })
 
-    // Step 1 — Go to NOUN login page
+    // Login
     console.log('Navigating to login page...')
     await page.goto('https://elearn.nou.edu.ng/login/index.php', {
       waitUntil: 'domcontentloaded',
       timeout: 30000
     })
 
-    // Step 2 — Fill in credentials
-    console.log('Filling credentials...')
-    await page.type('#username', matric, { delay: 50 })
-    await page.type('#password', password, { delay: 50 })
+    await page.type('#username', matric, { delay: 80 })
+    await page.type('#password', password, { delay: 80 })
 
-    // Step 3 — Click login
     await Promise.all([
       page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
       page.click('#loginbtn')
     ])
 
-    // Check if login failed
     const loginError = await page.$('.loginerrors, .alert-danger, #loginerrormessage')
     if (loginError) {
       await browser.close()
-      return res.status(401).json({ error: 'Invalid NOUN credentials. Please check your matric number and password.' })
+      return res.status(401).json({ error: 'Invalid NOUN credentials. Check your matric and password.' })
     }
 
     console.log('Login successful')
 
-    // Step 4 — Find active TMA quizzes
-    const currentUrl = page.url()
-    console.log('Current URL after login:', currentUrl)
-
-    // Navigate to My Courses
+    // Go to dashboard
     await page.goto('https://elearn.nou.edu.ng/my/', {
       waitUntil: 'domcontentloaded',
       timeout: 30000
     })
 
-    // Find all quiz/TMA links
-    const quizLinks = await page.evaluate(() => {
+    // Find TMA links for this round
+    const quizLinks = await page.evaluate((roundNum) => {
       const links = Array.from(document.querySelectorAll('a[href*="/mod/quiz/"]'))
       return links
         .map(a => ({ href: a.href, text: a.innerText.trim() }))
-        .filter(l => l.text.toLowerCase().includes('tma') || l.text.toLowerCase().includes('tutor'))
-        .slice(0, 10)
-    })
+        .filter(l => {
+          const text = l.text.toLowerCase()
+          return (
+            (text.includes('tma') || text.includes('tutor marked')) &&
+            text.includes(roundNum)
+          )
+        })
+        .slice(0, 30)
+    }, roundNumber)
 
-    console.log('Found quiz links:', quizLinks.length)
+    console.log(`Found ${quizLinks.length} TMA${roundNumber} links`)
 
     if (quizLinks.length === 0) {
       await browser.close()
       return res.json({
         success: true,
         quizzes: [],
-        message: 'No active TMA quizzes found on your dashboard'
+        message: `No TMA${roundNumber} found on your dashboard`
       })
     }
 
-    // Step 5 — Scrape questions from each quiz
+    // Scrape each quiz
     const results = []
 
-    for (const quiz of quizLinks.slice(0, 5)) {
+    for (const quiz of quizLinks) {
       try {
-        console.log('Scraping quiz:', quiz.text)
+        console.log('Scraping:', quiz.text)
         await page.goto(quiz.href, { waitUntil: 'domcontentloaded', timeout: 30000 })
 
-        // Click attempt/start button if present
-        const attemptBtn = await page.$('input[name="startattempt"], .singlebutton input[type="submit"]')
+        // Get course code from breadcrumb
+        const courseCode = await page.evaluate(() => {
+          const breadcrumb = document.querySelector('.breadcrumb, nav[aria-label] ol')
+          const text = breadcrumb?.innerText || document.title || ''
+          const match = text.match(/([A-Z]{2,4}\s*\d{3})/i)
+          return match ? match[1].replace(/\s+/g, '').toUpperCase() : 'UNKNOWN'
+        })
+
+        // Click start/attempt button
+        const attemptBtn = await page.$('input[name="startattempt"]')
         if (attemptBtn) {
           await Promise.all([
             page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
             attemptBtn.click()
           ])
 
-          // Confirm if there's a confirmation dialog
-          const confirmBtn = await page.$('input[type="submit"][value*="start"], button[type="submit"]')
+          const confirmBtn = await page.$('button[type="submit"], input[type="submit"]')
           if (confirmBtn) {
             await Promise.all([
               page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
@@ -165,41 +142,49 @@ browser = await puppeteer.launch({
           }
         }
 
-        // Scrape all questions and options from all pages
+        // Scrape questions across all pages
         const questions = []
         let hasNextPage = true
+        let questionIndex = 1
 
         while (hasNextPage) {
-          const pageQuestions = await page.evaluate(() => {
+          const pageQuestions = await page.evaluate((startIndex) => {
             const qEls = document.querySelectorAll('.que')
             const qs = []
 
-            qEls.forEach((el, index) => {
-              // Get question text
+            qEls.forEach((el) => {
               const qTextEl = el.querySelector('.qtext, .questiontext, .formulation')
               const questionText = qTextEl?.innerText?.trim() || ''
 
-              // Get options
-              const optionEls = el.querySelectorAll('.answer .r0, .answer .r1, .answer label')
+              const answerDiv = el.querySelector('.answer')
               const options = []
-              optionEls.forEach(opt => {
-                const text = opt.innerText?.trim()
-                if (text && text.length > 0) options.push(text)
-              })
 
-              if (questionText) {
-                qs.push({ questionText, options, index: index + 1 })
+              if (answerDiv) {
+                const optEls = answerDiv.querySelectorAll('div.r0, div.r1, label')
+                optEls.forEach(opt => {
+                  const clone = opt.cloneNode(true)
+                  clone.querySelectorAll('input, .answernumber').forEach(e => e.remove())
+                  const text = clone.innerText?.trim()
+                  if (text && text.length > 0 && !text.match(/^[a-d]\.?$/i)) {
+                    options.push(text)
+                  }
+                })
+              }
+
+              if (questionText && questionText.length > 5) {
+                qs.push({ questionText, options, index: startIndex + qs.length })
               }
             })
 
             return qs
-          })
+          }, questionIndex)
 
           questions.push(...pageQuestions)
+          questionIndex += pageQuestions.length
 
-          // Check for next page button
-          const nextBtn = await page.$('input[name="next"], .nextpage input, button.nextpage')
-          if (nextBtn) {
+          // Check for next page
+          const nextBtn = await page.$('input[name="next"], .mod_quiz-next-nav')
+          if (nextBtn && pageQuestions.length > 0) {
             await Promise.all([
               page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }),
               nextBtn.click()
@@ -209,9 +194,12 @@ browser = await puppeteer.launch({
           }
         }
 
+        console.log(`${courseCode}: ${questions.length} questions found`)
+
         if (questions.length > 0) {
           results.push({
             title: quiz.text,
+            course_code: courseCode,
             url: quiz.href,
             questions
           })
@@ -223,13 +211,15 @@ browser = await puppeteer.launch({
     }
 
     await browser.close()
-    console.log('Scraping complete. Quizzes:', results.length)
+    console.log(`Scraping complete. ${results.length} courses scraped.`)
 
     return res.json({ success: true, quizzes: results })
 
   } catch (err) {
     console.error('Scraper error:', err)
-    if (browser) await browser.close()
+    if (browser) {
+      try { await browser.close() } catch (_) {}
+    }
     return res.status(500).json({ error: 'Scraping failed: ' + err.message })
   }
 })
