@@ -1,6 +1,7 @@
 const express = require('express')
-const puppeteer = require('puppeteer')
 const cors = require('cors')
+const https = require('https')
+const http = require('http')
 
 const app = express()
 app.use(express.json())
@@ -11,6 +12,114 @@ const SECRET_KEY = process.env.SCRAPER_SECRET || 'noun-tma-secret-2024-olakunle'
 app.get('/', (req, res) => {
   res.json({ status: 'NOUN Scraper running' })
 })
+
+// Simple HTTP fetch helper with cookie support
+function httpFetch(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url)
+    const lib = urlObj.protocol === 'https:' ? https : http
+    
+    const reqOptions = {
+      hostname: urlObj.hostname,
+      path: urlObj.pathname + urlObj.search,
+      method: options.method || 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Connection': 'keep-alive',
+        ...options.headers
+      }
+    }
+
+    const req = lib.request(reqOptions, (res) => {
+      let data = ''
+      res.on('data', chunk => data += chunk)
+      res.on('end', () => resolve({ 
+        status: res.statusCode, 
+        headers: res.headers, 
+        body: data,
+        location: res.headers.location
+      }))
+    })
+
+    req.on('error', reject)
+    if (options.body) req.write(options.body)
+    req.end()
+  })
+}
+
+function extractLoginToken(html) {
+  const match = html.match(/name="logintoken"\s+value="([^"]+)"/)
+  return match ? match[1] : ''
+}
+
+function extractQuizLinks(html, roundNumber) {
+  const links = []
+  const linkRegex = /href="(https:\/\/elearn\.nou\.edu\.ng\/mod\/quiz\/[^"]+)">([^<]+)</g
+  let match
+  while ((match = linkRegex.exec(html)) !== null) {
+    const text = match[2].toLowerCase()
+    if ((text.includes('tma') || text.includes('tutor marked')) && 
+        text.includes(roundNumber)) {
+      links.push({ href: match[1], text: match[2].trim() })
+    }
+  }
+  return [...new Map(links.map(l => [l.href, l])).values()].slice(0, 30)
+}
+
+function extractCourseCode(html) {
+  const match = html.match(/([A-Z]{2,4}\s*\d{3})/i)
+  return match ? match[1].replace(/\s+/g, '').toUpperCase() : 'UNKNOWN'
+}
+
+function extractQuestions(html) {
+  const questions = []
+  
+  // Match question blocks
+  const queRegex = /<div[^>]+class="[^"]*\bque\b[^"]*"[^>]*>([\s\S]*?)(?=<div[^>]+class="[^"]*\bque\b|$)/g
+  let queMatch
+  let index = 1
+
+  while ((queMatch = queRegex.exec(html)) !== null) {
+    const block = queMatch[1]
+    
+    // Extract question text
+    const qtextMatch = block.match(/<div[^>]+class="[^"]*\bqtext\b[^"]*"[^>]*>([\s\S]*?)<\/div>/)
+    if (!qtextMatch) continue
+    
+    const questionText = qtextMatch[1]
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&#39;/g, "'")
+      .trim()
+
+    if (!questionText || questionText.length < 5) continue
+
+    // Extract options
+    const options = []
+    const optRegex = /<div[^>]+class="[^"]*\br[01]\b[^"]*"[^>]*>([\s\S]*?)<\/div>/g
+    let optMatch
+    while ((optMatch = optRegex.exec(block)) !== null) {
+      const optText = optMatch[1]
+        .replace(/<input[^>]*>/g, '')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .trim()
+      if (optText && optText.length > 0 && !optText.match(/^[a-d]\.?$/i)) {
+        options.push(optText)
+      }
+    }
+
+    questions.push({ questionText, options, index: index++ })
+  }
+
+  return questions
+}
 
 app.post('/scrape-tma', async (req, res) => {
   const { matric, password, secret, tma_round } = req.body
@@ -24,177 +133,174 @@ app.post('/scrape-tma', async (req, res) => {
   }
 
   const roundNumber = tma_round?.replace('TMA', '') || '1'
-  let browser = null
+  let cookies = ''
 
   try {
-    console.log(`Starting scrape for ${matric} — ${tma_round}`)
+    console.log(`Starting HTTP scrape for ${matric} — ${tma_round}`)
 
-    browser = await puppeteer.launch({
-      headless: 'new',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--no-first-run',
-        '--no-zygote',
-        '--single-process',
-        '--disable-extensions',
-        '--disable-background-networking',
-        '--disable-sync',
-        '--disable-translate',
-        '--hide-scrollbars',
-        '--mute-audio',
-        '--safebrowsing-disable-auto-update',
-        '--js-flags=--max-old-space-size=256'
-      ]
+    // Step 1 — Get login page to extract token
+    const loginPage = await httpFetch('https://elearn.nou.edu.ng/login/index.php')
+    
+    // Save initial cookies
+    const setCookie = loginPage.headers['set-cookie']
+    if (setCookie) {
+      cookies = setCookie.map(c => c.split(';')[0]).join('; ')
+    }
+
+    const loginToken = extractLoginToken(loginPage.body)
+    console.log('Got login token:', loginToken ? 'yes' : 'no')
+
+    // Step 2 — POST login credentials
+    const loginBody = new URLSearchParams({
+      username: matric,
+      password: password,
+      logintoken: loginToken,
+      anchor: ''
+    }).toString()
+
+    const loginRes = await httpFetch('https://elearn.nou.edu.ng/login/index.php', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': cookies,
+        'Referer': 'https://elearn.nou.edu.ng/login/index.php'
+      },
+      body: loginBody
     })
 
-    const page = await browser.newPage()
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-    await page.setViewport({ width: 1280, height: 800 })
+    // Update cookies from login response
+    const loginCookies = loginRes.headers['set-cookie']
+    if (loginCookies) {
+      const newCookies = loginCookies.map(c => c.split(';')[0])
+      const cookieMap = new Map(cookies.split('; ').map(c => c.split('=')))
+      newCookies.forEach(c => {
+        const [k, v] = c.split('=')
+        cookieMap.set(k, v)
+      })
+      cookies = Array.from(cookieMap.entries()).map(([k, v]) => `${k}=${v}`).join('; ')
+    }
 
-    // Login
-    console.log('Navigating to login page...')
-    await page.goto('https://elearn.nou.edu.ng/login/index.php', {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000
-    })
-
-    await page.type('#username', matric, { delay: 80 })
-    await page.type('#password', password, { delay: 80 })
-
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
-      page.click('#loginbtn')
-    ])
-
-    const loginError = await page.$('.loginerrors, .alert-danger, #loginerrormessage')
-    if (loginError) {
-      await browser.close()
+    // Check if login failed — still on login page
+    if (loginRes.body.includes('loginerrormessage') || loginRes.body.includes('Invalid login')) {
       return res.status(401).json({ error: 'Invalid NOUN credentials. Check your matric and password.' })
     }
 
     console.log('Login successful')
 
-    // Go to dashboard
-    await page.goto('https://elearn.nou.edu.ng/my/', {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000
+    // Step 3 — Get dashboard
+    const dashboardRes = await httpFetch('https://elearn.nou.edu.ng/my/', {
+      headers: { 'Cookie': cookies }
     })
 
-    // Find TMA links for this round
-    const quizLinks = await page.evaluate((roundNum) => {
-      const links = Array.from(document.querySelectorAll('a[href*="/mod/quiz/"]'))
-      return links
-        .map(a => ({ href: a.href, text: a.innerText.trim() }))
-        .filter(l => {
-          const text = l.text.toLowerCase()
-          return (
-            (text.includes('tma') || text.includes('tutor marked')) &&
-            text.includes(roundNum)
-          )
-        })
-        .slice(0, 1)
-    }, roundNumber)
+    // Follow redirect if needed
+    let dashboardHtml = dashboardRes.body
+    if (dashboardRes.status === 303 || dashboardRes.status === 302) {
+      const redirectRes = await httpFetch(dashboardRes.location || 'https://elearn.nou.edu.ng/my/', {
+        headers: { 'Cookie': cookies }
+      })
+      dashboardHtml = redirectRes.body
+    }
 
+    // Step 4 — Find TMA quiz links
+    const quizLinks = extractQuizLinks(dashboardHtml, roundNumber)
     console.log(`Found ${quizLinks.length} TMA${roundNumber} links`)
 
     if (quizLinks.length === 0) {
-      await browser.close()
-      return res.json({
-        success: true,
-        quizzes: [],
-        message: `No TMA${roundNumber} found on your dashboard`
-      })
+      return res.json({ success: true, quizzes: [], message: `No TMA${roundNumber} found` })
     }
 
-    // Scrape each quiz
+    // Step 5 — Scrape each quiz
     const results = []
 
-    for (const quiz of quizLinks) {
+    for (const quiz of quizLinks.slice(0, 20)) {
       try {
         console.log('Scraping:', quiz.text)
-        await page.goto(quiz.href, { waitUntil: 'domcontentloaded', timeout: 30000 })
-
-        // Get course code from breadcrumb
-        const courseCode = await page.evaluate(() => {
-          const breadcrumb = document.querySelector('.breadcrumb, nav[aria-label] ol')
-          const text = breadcrumb?.innerText || document.title || ''
-          const match = text.match(/([A-Z]{2,4}\s*\d{3})/i)
-          return match ? match[1].replace(/\s+/g, '').toUpperCase() : 'UNKNOWN'
+        
+        const quizPage = await httpFetch(quiz.href, {
+          headers: { 'Cookie': cookies }
         })
 
-        // Click start/attempt button
-        const attemptBtn = await page.$('input[name="startattempt"]')
-        if (attemptBtn) {
-          await Promise.all([
-            page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
-            attemptBtn.click()
-          ])
+        const courseCode = extractCourseCode(quizPage.body)
 
-          const confirmBtn = await page.$('button[type="submit"], input[type="submit"]')
-          if (confirmBtn) {
-            await Promise.all([
-              page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
-              confirmBtn.click()
-            ])
+        // Check if we need to start attempt
+        let quizHtml = quizPage.body
+        
+        if (quizHtml.includes('startattempt') || quizHtml.includes('Start attempt')) {
+          // Extract sesskey
+          const sesskeyMatch = quizHtml.match(/sesskey=([a-zA-Z0-9]+)/)
+          const sesskey = sesskeyMatch ? sesskeyMatch[1] : ''
+          
+          const attemptBody = new URLSearchParams({
+            sesskey,
+            _qf__mod_quiz_view_form: '1',
+            startattempt: '1'
+          }).toString()
+
+          const attemptRes = await httpFetch(quiz.href, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'Cookie': cookies,
+              'Referer': quiz.href
+            },
+            body: attemptBody
+          })
+
+          quizHtml = attemptRes.body
+
+          // Follow redirect
+          if (attemptRes.status === 303 || attemptRes.status === 302) {
+            const redirectUrl = attemptRes.location
+            if (redirectUrl) {
+              const redirectRes = await httpFetch(redirectUrl, {
+                headers: { 'Cookie': cookies }
+              })
+              quizHtml = redirectRes.body
+            }
           }
         }
 
-        // Scrape questions across all pages
+        // Extract questions from all pages
         const questions = []
-        let hasNextPage = true
-        let questionIndex = 1
+        let currentHtml = quizHtml
+        let hasNext = true
 
-        while (hasNextPage) {
-          const pageQuestions = await page.evaluate((startIndex) => {
-            const qEls = document.querySelectorAll('.que')
-            const qs = []
-
-            qEls.forEach((el) => {
-              const qTextEl = el.querySelector('.qtext, .questiontext, .formulation')
-              const questionText = qTextEl?.innerText?.trim() || ''
-
-              const answerDiv = el.querySelector('.answer')
-              const options = []
-
-              if (answerDiv) {
-                const optEls = answerDiv.querySelectorAll('div.r0, div.r1, label')
-                optEls.forEach(opt => {
-                  const clone = opt.cloneNode(true)
-                  clone.querySelectorAll('input, .answernumber').forEach(e => e.remove())
-                  const text = clone.innerText?.trim()
-                  if (text && text.length > 0 && !text.match(/^[a-d]\.?$/i)) {
-                    options.push(text)
-                  }
-                })
-              }
-
-              if (questionText && questionText.length > 5) {
-                qs.push({ questionText, options, index: startIndex + qs.length })
-              }
-            })
-
-            return qs
-          }, questionIndex)
-
+        while (hasNext) {
+          const pageQuestions = extractQuestions(currentHtml)
           questions.push(...pageQuestions)
-          questionIndex += pageQuestions.length
 
           // Check for next page
-          const nextBtn = await page.$('input[name="next"], .mod_quiz-next-nav')
-          if (nextBtn && pageQuestions.length > 0) {
-            await Promise.all([
-              page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }),
-              nextBtn.click()
-            ])
+          if (currentHtml.includes('name="next"') || currentHtml.includes('mod_quiz-next-nav')) {
+            const nextUrlMatch = currentHtml.match(/action="([^"]+)"/)
+            const sesskeyMatch = currentHtml.match(/name="sesskey"\s+value="([^"]+)"/)
+            const pageMatch = currentHtml.match(/name="page"\s+value="(\d+)"/)
+            
+            if (nextUrlMatch && sesskeyMatch && pageMatch) {
+              const nextPage = parseInt(pageMatch[1]) + 1
+              const nextBody = new URLSearchParams({
+                sesskey: sesskeyMatch[1],
+                next: '1',
+                page: String(nextPage)
+              }).toString()
+
+              const nextRes = await httpFetch(nextUrlMatch[1], {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                  'Cookie': cookies
+                },
+                body: nextBody
+              })
+              currentHtml = nextRes.body
+            } else {
+              hasNext = false
+            }
           } else {
-            hasNextPage = false
+            hasNext = false
           }
         }
 
-        console.log(`${courseCode}: ${questions.length} questions found`)
+        console.log(`${courseCode}: ${questions.length} questions`)
 
         if (questions.length > 0) {
           results.push({
@@ -206,20 +312,15 @@ app.post('/scrape-tma', async (req, res) => {
         }
 
       } catch (quizErr) {
-        console.error('Error scraping quiz:', quiz.text, quizErr.message)
+        console.error('Quiz error:', quiz.text, quizErr.message)
       }
     }
 
-    await browser.close()
-    console.log(`Scraping complete. ${results.length} courses scraped.`)
-
+    console.log(`Done. ${results.length} courses scraped.`)
     return res.json({ success: true, quizzes: results })
 
   } catch (err) {
     console.error('Scraper error:', err)
-    if (browser) {
-      try { await browser.close() } catch (_) {}
-    }
     return res.status(500).json({ error: 'Scraping failed: ' + err.message })
   }
 })
