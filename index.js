@@ -95,7 +95,7 @@ app.post('/scrape-tma', async (req, res) => {
             text.includes(roundNum)
           )
         })
-        .slice(0, 30)
+        .slice(0, 1)
     }, roundNumber)
 
     console.log(`Found ${quizLinks.length} TMA${roundNumber} links`)
