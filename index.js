@@ -200,7 +200,10 @@ app.post('/scrape-tma', async (req, res) => {
       })
       dashboardHtml = redirectRes.body
     }
-
+      console.log("Dashboard URL loaded")
+console.log("Dashboard length:", dashboardHtml.length)
+console.log("Dashboard preview:")
+console.log(dashboardHtml.substring(0, 3000))
     // Step 4 — Find TMA quiz links
     const quizLinks = extractQuizLinks(dashboardHtml, roundNumber)
     console.log(`Found ${quizLinks.length} TMA${roundNumber} links`)
