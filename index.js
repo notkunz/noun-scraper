@@ -18,6 +18,27 @@ app.get('/', (req, res) => {
   res.json({ status: 'NOUN Scraper running' })
 })
 
+// Add at top of /scrape-tma route handler
+const SCRAPE_TIMEOUT = 120000 // 2 minutes
+
+// Wrap browser operations in a promise with timeout
+const scrapeWithTimeout = new Promise(async (resolve, reject) => {
+  const timer = setTimeout(() => {
+    reject(new Error('Scraping timed out after 2 minutes'))
+  }, SCRAPE_TIMEOUT)
+
+  try {
+    // ... all your browser code here
+    clearTimeout(timer)
+    resolve(results)
+  } catch (err) {
+    clearTimeout(timer)
+    reject(err)
+  }
+})
+
+const results = await scrapeWithTimeout
+
 app.post('/scrape-tma', async (req, res) => {
   const { matric, password, secret } = req.body
 
@@ -35,18 +56,28 @@ app.post('/scrape-tma', async (req, res) => {
   try {
     console.log(`Starting scrape for ${matric}`)
 
-    browser = await puppeteer.launch({
-      headless: 'new',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--no-first-run',
-        '--no-zygote',
-        '--single-process'
-      ]
-    })
+browser = await puppeteer.launch({
+  headless: 'new',
+  args: [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--no-first-run',
+    '--no-zygote',
+    '--single-process',
+    '--disable-extensions',
+    '--disable-background-networking',
+    '--disable-sync',
+    '--disable-translate',
+    '--hide-scrollbars',
+    '--metrics-recording-only',
+    '--mute-audio',
+    '--no-first-run',
+    '--safebrowsing-disable-auto-update',
+    '--js-flags=--max-old-space-size=256'
+  ]
+})
 
     const page = await browser.newPage()
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
@@ -54,7 +85,7 @@ app.post('/scrape-tma', async (req, res) => {
     // Step 1 — Go to NOUN login page
     console.log('Navigating to login page...')
     await page.goto('https://elearn.nou.edu.ng/login/index.php', {
-      waitUntil: 'networkidle2',
+      waitUntil: 'domcontentloaded',
       timeout: 30000
     })
 
@@ -65,7 +96,7 @@ app.post('/scrape-tma', async (req, res) => {
 
     // Step 3 — Click login
     await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
       page.click('#loginbtn')
     ])
 
@@ -84,7 +115,7 @@ app.post('/scrape-tma', async (req, res) => {
 
     // Navigate to My Courses
     await page.goto('https://elearn.nou.edu.ng/my/', {
-      waitUntil: 'networkidle2',
+      waitUntil: 'domcontentloaded',
       timeout: 30000
     })
 
@@ -114,13 +145,13 @@ app.post('/scrape-tma', async (req, res) => {
     for (const quiz of quizLinks.slice(0, 5)) {
       try {
         console.log('Scraping quiz:', quiz.text)
-        await page.goto(quiz.href, { waitUntil: 'networkidle2', timeout: 30000 })
+        await page.goto(quiz.href, { waitUntil: 'domcontentloaded', timeout: 30000 })
 
         // Click attempt/start button if present
         const attemptBtn = await page.$('input[name="startattempt"], .singlebutton input[type="submit"]')
         if (attemptBtn) {
           await Promise.all([
-            page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
+            page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
             attemptBtn.click()
           ])
 
@@ -128,7 +159,7 @@ app.post('/scrape-tma', async (req, res) => {
           const confirmBtn = await page.$('input[type="submit"][value*="start"], button[type="submit"]')
           if (confirmBtn) {
             await Promise.all([
-              page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }),
+              page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
               confirmBtn.click()
             ])
           }
@@ -170,7 +201,7 @@ app.post('/scrape-tma', async (req, res) => {
           const nextBtn = await page.$('input[name="next"], .nextpage input, button.nextpage')
           if (nextBtn) {
             await Promise.all([
-              page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }),
+              page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }),
               nextBtn.click()
             ])
           } else {
