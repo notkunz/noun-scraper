@@ -42,19 +42,12 @@ app.post('/scrape-tma', async (req, res) => {
         '--single-process',
         '--disable-extensions',
         '--disable-background-networking',
-        '--disable-sync',
-        '--disable-translate',
-        '--hide-scrollbars',
-        '--mute-audio',
-        '--disable-images',
-        '--blink-settings=imagesEnabled=false',
         '--js-flags=--max-old-space-size=256'
       ]
     })
 
     const page = await browser.newPage()
 
-    // Block images, fonts and CSS to save memory
     await page.setRequestInterception(true)
     page.on('request', req => {
       if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
@@ -90,13 +83,11 @@ app.post('/scrape-tma', async (req, res) => {
 
     console.log('Login successful')
 
-    // Go to dashboard and wait for course links to load
     await page.goto('https://elearn.nou.edu.ng/my/', {
       waitUntil: 'networkidle0',
       timeout: 45000
     })
 
-    // Find TMA links
     const quizLinks = await page.evaluate((roundNum) => {
       const links = Array.from(document.querySelectorAll('a[href*="/mod/quiz/"]'))
       return links
@@ -121,8 +112,13 @@ app.post('/scrape-tma', async (req, res) => {
     for (const quiz of quizLinks) {
       try {
         console.log('Scraping:', quiz.text)
+
         await page.goto(quiz.href, { waitUntil: 'domcontentloaded', timeout: 30000 })
 
+        let currentUrl = page.url()
+        console.log('Quiz URL:', currentUrl)
+
+        // Extract course code
         const courseCode = await page.evaluate(() => {
           const breadcrumb = document.querySelector('.breadcrumb, nav[aria-label] ol')
           const text = breadcrumb?.innerText || document.title || ''
@@ -130,102 +126,107 @@ app.post('/scrape-tma', async (req, res) => {
           return match ? match[1].replace(/\s+/g, '').toUpperCase() : 'UNKNOWN'
         })
 
-  // Check current URL after navigation
-let currentUrl = page.url()
-console.log('Quiz page URL:', currentUrl)
+        console.log('Course code:', courseCode)
 
-// If we're on the view page, start the attempt
-if (currentUrl.includes('mod/quiz/view.php') || currentUrl.includes('mod/quiz/')) {
-  const attemptBtn = await page.$('input[name="startattempt"], .singlebutton input[type="submit"]')
-  
-  if (attemptBtn) {
-    console.log('Clicking start attempt...')
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
-      attemptBtn.click()
-    ])
-    
-    currentUrl = page.url()
-    console.log('After attempt click:', currentUrl)
-    
-    // Handle confirmation page
-    if (!currentUrl.includes('attempt.php')) {
-      const confirmBtn = await page.$('button[type="submit"], input[type="submit"][value*="start" i], input[type="submit"]')
-      if (confirmBtn) {
-        await Promise.all([
-          page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
-          confirmBtn.click()
-        ])
-        currentUrl = page.url()
-        console.log('After confirm:', currentUrl)
-      }
-    }
-  } else {
-    // Maybe attempt already started — look for "Continue the last attempt" button
-    const continueBtn = await page.$('input[name="startattempt"], a[href*="attempt.php"]')
-    if (continueBtn) {
-      await Promise.all([
-        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
-        continueBtn.click()
-      ])
-      currentUrl = page.url()
-      console.log('Continued existing attempt:', currentUrl)
-    }
-  }
-}
+        // If already on attempt page skip clicking
+        if (!currentUrl.includes('attempt.php')) {
+          // Try start attempt button
+          const attemptBtn = await page.$('input[name="startattempt"]')
+          if (attemptBtn) {
+            console.log('Clicking start attempt...')
+            await Promise.all([
+              page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
+              attemptBtn.click()
+            ])
+            currentUrl = page.url()
+            console.log('After start click:', currentUrl)
+          }
 
-// Wait for questions to appear
-await page.waitForSelector('.que, .qtext, .questiontext', { timeout: 10000 }).catch(() => {
-  console.log('No question selector found on page')
-})
+          // Confirmation page
+          if (!currentUrl.includes('attempt.php')) {
+            const confirmBtn = await page.$('button[type="submit"], input[type="submit"]')
+            if (confirmBtn) {
+              console.log('Clicking confirm...')
+              await Promise.all([
+                page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
+                confirmBtn.click()
+              ])
+              currentUrl = page.url()
+              console.log('After confirm:', currentUrl)
+            }
+          }
 
-// Log page content for debugging
-const pageTitle = await page.title()
-console.log('Page title:', pageTitle)
-console.log('Current URL:', page.url())
+          // Try continue last attempt link
+          if (!currentUrl.includes('attempt.php')) {
+            const continueLink = await page.$('a[href*="attempt.php"]')
+            if (continueLink) {
+              const href = await page.evaluate(el => el.href, continueLink)
+              console.log('Continuing existing attempt:', href)
+              await page.goto(href, { waitUntil: 'domcontentloaded', timeout: 30000 })
+              currentUrl = page.url()
+            }
+          }
+        }
 
+        console.log('Final URL:', currentUrl)
 
+        // Wait for questions
+        try {
+          await page.waitForSelector('.que', { timeout: 8000 })
+        } catch (_) {
+          console.log('No .que found, trying alternatives...')
+        }
+
+        // Log page structure for debugging
+        const pageInfo = await page.evaluate(() => {
+          return {
+            title: document.title,
+            queCount: document.querySelectorAll('.que').length,
+            qtextCount: document.querySelectorAll('.qtext').length,
+            formCount: document.querySelectorAll('form').length,
+            bodySnippet: document.body.innerText.slice(0, 300)
+          }
+        })
+        console.log('Page info:', JSON.stringify(pageInfo))
+
+        // Scrape questions
         const questions = []
         let hasNextPage = true
         let questionIndex = 1
 
         while (hasNextPage) {
-const pageQuestions = await page.evaluate((startIndex) => {
-  const qEls = document.querySelectorAll('.que')
-  console.log('Found .que elements:', qEls.length) // this won't show in Node but helps
-  
-  // Also try alternative selectors
-  const altEls = document.querySelectorAll('.formulation, .qtext, [class*="question"]')
-  
-  const qs = []
-  const elements = qEls.length > 0 ? qEls : altEls
-  
-  elements.forEach((el) => {
-    const qTextEl = el.querySelector('.qtext, .questiontext, .formulation') || el
-    const questionText = qTextEl?.innerText?.trim() || ''
-    const answerDiv = el.querySelector('.answer')
-    const options = []
-    if (answerDiv) {
-      const optEls = answerDiv.querySelectorAll('div.r0, div.r1, label')
-      optEls.forEach(opt => {
-        const clone = opt.cloneNode(true)
-        clone.querySelectorAll('input, .answernumber').forEach(e => e.remove())
-        const text = clone.innerText?.trim()
-        if (text && text.length > 0 && !text.match(/^[a-d]\.?$/i)) {
-          options.push(text)
-        }
-      })
-    }
-    if (questionText && questionText.length > 5) {
-      qs.push({ questionText, options, index: startIndex + qs.length })
-    }
-  })
-  return qs
-}, questionIndex)
+          const pageQuestions = await page.evaluate((startIndex) => {
+            const qEls = document.querySelectorAll('.que')
+            const qs = []
 
-// Log what we found
-console.log(`Page questions found: ${pageQuestions.length}`)
+            qEls.forEach((el) => {
+              const qTextEl = el.querySelector('.qtext, .questiontext, .formulation')
+              const questionText = qTextEl?.innerText?.trim() || ''
 
+              const answerDiv = el.querySelector('.answer')
+              const options = []
+
+              if (answerDiv) {
+                const optEls = answerDiv.querySelectorAll('div.r0, div.r1, label')
+                optEls.forEach(opt => {
+                  const clone = opt.cloneNode(true)
+                  clone.querySelectorAll('input, .answernumber').forEach(e => e.remove())
+                  const text = clone.innerText?.trim()
+                  if (text && text.length > 0 && !text.match(/^[a-d]\.?$/i)) {
+                    options.push(text)
+                  }
+                })
+              }
+
+              if (questionText && questionText.length > 5) {
+                qs.push({ questionText, options, index: startIndex + qs.length })
+              }
+            })
+
+            return qs
+          }, questionIndex)
+
+          console.log(`Found ${pageQuestions.length} questions on this page`)
           questions.push(...pageQuestions)
           questionIndex += pageQuestions.length
 
@@ -240,9 +241,15 @@ console.log(`Page questions found: ${pageQuestions.length}`)
           }
         }
 
-        console.log(`${courseCode}: ${questions.length} questions`)
+        console.log(`${courseCode}: ${questions.length} total questions`)
+
         if (questions.length > 0) {
-          results.push({ title: quiz.text, course_code: courseCode, url: quiz.href, questions })
+          results.push({
+            title: quiz.text,
+            course_code: courseCode,
+            url: quiz.href,
+            questions
+          })
         }
 
       } catch (quizErr) {
