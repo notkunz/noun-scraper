@@ -87,7 +87,7 @@ app.post('/scrape-tma', async (req, res) => {
       waitUntil: 'networkidle0',
       timeout: 45000
     })
-    
+
 const quizLinks = await page.evaluate((roundNum) => {
   const links = Array.from(document.querySelectorAll('a[href*="/mod/quiz/"]'))
   return links
@@ -203,29 +203,36 @@ const quizLinks = await page.evaluate((roundNum) => {
             const qEls = document.querySelectorAll('.que')
             const qs = []
 
-            qEls.forEach((el) => {
-              const qTextEl = el.querySelector('.qtext, .questiontext, .formulation')
-              const questionText = qTextEl?.innerText?.trim() || ''
+qEls.forEach((el) => {
+  // Clone and remove unwanted elements first
+  const clone = el.cloneNode(true)
+  
+  // Remove answer options, buttons, and noise
+  clone.querySelectorAll('.answer, .outcome, .comment, .gradingdetails, input, button, .clearfix').forEach(e => e.remove())
+  
+  const qTextEl = clone.querySelector('.qtext, .questiontext, .formulation')
+  const questionText = qTextEl?.innerText?.trim() || ''
 
-              const answerDiv = el.querySelector('.answer')
-              const options = []
+  // Get options from ORIGINAL element (not clone)
+  const answerDiv = el.querySelector('.answer')
+  const options = []
 
-              if (answerDiv) {
-                const optEls = answerDiv.querySelectorAll('div.r0, div.r1, label')
-                optEls.forEach(opt => {
-                  const clone = opt.cloneNode(true)
-                  clone.querySelectorAll('input, .answernumber').forEach(e => e.remove())
-                  const text = clone.innerText?.trim()
-                  if (text && text.length > 0 && !text.match(/^[a-d]\.?$/i)) {
-                    options.push(text)
-                  }
-                })
-              }
+  if (answerDiv) {
+    const optEls = answerDiv.querySelectorAll('div.r0, div.r1, label')
+    optEls.forEach(opt => {
+      const optClone = opt.cloneNode(true)
+      optClone.querySelectorAll('input, .answernumber').forEach(e => e.remove())
+      const text = optClone.innerText?.trim()
+      if (text && text.length > 0 && !text.match(/^[a-d]\.?$/i)) {
+        options.push(text)
+      }
+    })
+  }
 
-              if (questionText && questionText.length > 5) {
-                qs.push({ questionText, options, index: startIndex + qs.length })
-              }
-            })
+  if (questionText && questionText.length > 5) {
+    qs.push({ questionText, options, index: startIndex + qs.length })
+  }
+})
 
             return qs
           }, questionIndex)
