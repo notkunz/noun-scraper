@@ -87,18 +87,22 @@ app.post('/scrape-tma', async (req, res) => {
       waitUntil: 'networkidle0',
       timeout: 45000
     })
-
-    const quizLinks = await page.evaluate((roundNum) => {
-      const links = Array.from(document.querySelectorAll('a[href*="/mod/quiz/"]'))
-      return links
-        .map(a => ({ href: a.href, text: a.innerText.trim() }))
-        .filter(l => {
-          const text = l.text.toLowerCase()
-          return (text.includes('tma') || text.includes('tutor marked')) &&
-            text.includes(roundNum)
-        })
-        .slice(0, 30)
-    }, roundNumber)
+    
+const quizLinks = await page.evaluate((roundNum) => {
+  const links = Array.from(document.querySelectorAll('a[href*="/mod/quiz/"]'))
+  return links
+    .map(a => ({ href: a.href, text: a.innerText.trim() }))
+    .filter(l => {
+      const text = l.text.toLowerCase().trim()
+      // Must contain tma or tutor marked
+      const isTMA = text.includes('tma') || text.includes('tutor marked')
+      // Must match EXACT round — "tma1" not "tma12" or "tma2"
+      const exactRound = new RegExp(`tma\\s*${roundNum}(\\b|\\s|$)`, 'i').test(text) ||
+        new RegExp(`tutor marked assignment\\s*${roundNum}(\\b|\\s|$)`, 'i').test(text)
+      return isTMA && exactRound
+    })
+    .slice(0, 30)
+}, roundNumber)
 
     console.log(`Found ${quizLinks.length} TMA${roundNumber} links`)
 
