@@ -130,51 +130,101 @@ app.post('/scrape-tma', async (req, res) => {
           return match ? match[1].replace(/\s+/g, '').toUpperCase() : 'UNKNOWN'
         })
 
-        const attemptBtn = await page.$('input[name="startattempt"]')
-        if (attemptBtn) {
-          await Promise.all([
-            page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
-            attemptBtn.click()
-          ])
-          const confirmBtn = await page.$('button[type="submit"]')
-          if (confirmBtn) {
-            await Promise.all([
-              page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
-              confirmBtn.click()
-            ])
-          }
-        }
+  // Check current URL after navigation
+let currentUrl = page.url()
+console.log('Quiz page URL:', currentUrl)
+
+// If we're on the view page, start the attempt
+if (currentUrl.includes('mod/quiz/view.php') || currentUrl.includes('mod/quiz/')) {
+  const attemptBtn = await page.$('input[name="startattempt"], .singlebutton input[type="submit"]')
+  
+  if (attemptBtn) {
+    console.log('Clicking start attempt...')
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
+      attemptBtn.click()
+    ])
+    
+    currentUrl = page.url()
+    console.log('After attempt click:', currentUrl)
+    
+    // Handle confirmation page
+    if (!currentUrl.includes('attempt.php')) {
+      const confirmBtn = await page.$('button[type="submit"], input[type="submit"][value*="start" i], input[type="submit"]')
+      if (confirmBtn) {
+        await Promise.all([
+          page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
+          confirmBtn.click()
+        ])
+        currentUrl = page.url()
+        console.log('After confirm:', currentUrl)
+      }
+    }
+  } else {
+    // Maybe attempt already started — look for "Continue the last attempt" button
+    const continueBtn = await page.$('input[name="startattempt"], a[href*="attempt.php"]')
+    if (continueBtn) {
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
+        continueBtn.click()
+      ])
+      currentUrl = page.url()
+      console.log('Continued existing attempt:', currentUrl)
+    }
+  }
+}
+
+// Wait for questions to appear
+await page.waitForSelector('.que, .qtext, .questiontext', { timeout: 10000 }).catch(() => {
+  console.log('No question selector found on page')
+})
+
+// Log page content for debugging
+const pageTitle = await page.title()
+console.log('Page title:', pageTitle)
+console.log('Current URL:', page.url())
+
 
         const questions = []
         let hasNextPage = true
         let questionIndex = 1
 
         while (hasNextPage) {
-          const pageQuestions = await page.evaluate((startIndex) => {
-            const qEls = document.querySelectorAll('.que')
-            const qs = []
-            qEls.forEach((el) => {
-              const qTextEl = el.querySelector('.qtext, .questiontext, .formulation')
-              const questionText = qTextEl?.innerText?.trim() || ''
-              const answerDiv = el.querySelector('.answer')
-              const options = []
-              if (answerDiv) {
-                const optEls = answerDiv.querySelectorAll('div.r0, div.r1, label')
-                optEls.forEach(opt => {
-                  const clone = opt.cloneNode(true)
-                  clone.querySelectorAll('input, .answernumber').forEach(e => e.remove())
-                  const text = clone.innerText?.trim()
-                  if (text && text.length > 0 && !text.match(/^[a-d]\.?$/i)) {
-                    options.push(text)
-                  }
-                })
-              }
-              if (questionText && questionText.length > 5) {
-                qs.push({ questionText, options, index: startIndex + qs.length })
-              }
-            })
-            return qs
-          }, questionIndex)
+const pageQuestions = await page.evaluate((startIndex) => {
+  const qEls = document.querySelectorAll('.que')
+  console.log('Found .que elements:', qEls.length) // this won't show in Node but helps
+  
+  // Also try alternative selectors
+  const altEls = document.querySelectorAll('.formulation, .qtext, [class*="question"]')
+  
+  const qs = []
+  const elements = qEls.length > 0 ? qEls : altEls
+  
+  elements.forEach((el) => {
+    const qTextEl = el.querySelector('.qtext, .questiontext, .formulation') || el
+    const questionText = qTextEl?.innerText?.trim() || ''
+    const answerDiv = el.querySelector('.answer')
+    const options = []
+    if (answerDiv) {
+      const optEls = answerDiv.querySelectorAll('div.r0, div.r1, label')
+      optEls.forEach(opt => {
+        const clone = opt.cloneNode(true)
+        clone.querySelectorAll('input, .answernumber').forEach(e => e.remove())
+        const text = clone.innerText?.trim()
+        if (text && text.length > 0 && !text.match(/^[a-d]\.?$/i)) {
+          options.push(text)
+        }
+      })
+    }
+    if (questionText && questionText.length > 5) {
+      qs.push({ questionText, options, index: startIndex + qs.length })
+    }
+  })
+  return qs
+}, questionIndex)
+
+// Log what we found
+console.log(`Page questions found: ${pageQuestions.length}`)
 
           questions.push(...pageQuestions)
           questionIndex += pageQuestions.length
