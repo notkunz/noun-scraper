@@ -458,6 +458,22 @@ if (quizLinks.length === 0) {
   return
 }
 
+
+
+// After finding courseLinks, check first course for ALL links
+if (courseLinks.length > 0) {
+  await page.goto(courseLinks[0].href, { waitUntil: 'domcontentloaded', timeout: 20000 })
+  
+  const allCourseLinks = await page.evaluate(() => {
+    return Array.from(document.querySelectorAll('a'))
+      .map(a => ({ href: a.href, text: a.innerText.trim() }))
+      .filter(l => l.text.length > 0 && l.href.includes('elearn'))
+      .slice(0, 20)
+  })
+  
+  await log(runId, `🔍 First course (${courseLinks[0].text}) links: ${JSON.stringify(allCourseLinks.slice(0, 5))}`)
+}
+
     // Deduct token
     await supabase.rpc('debit_token_wallet', { p_user_id: userId, p_amount: 1 })
     await supabase.from('token_transactions').insert({
@@ -468,76 +484,105 @@ if (quizLinks.length === 0) {
 
     const allResults = []
 
-    for (const quiz of quizLinks) {
-      const courseCode = quiz.course_code || 'UNKNOWN'
-      
-      try {
-        await page.goto(quiz.href, { waitUntil: 'domcontentloaded', timeout: 30000 })
+for (const quiz of quizLinks) {
+  try {
+    await log(runId, `📖 Scraping ${quiz.text}...`)
+    await page.goto(quiz.href, { waitUntil: 'domcontentloaded', timeout: 30000 })
 
-        const detectedCode = await page.evaluate(() => {
-          const b = document.querySelector('.breadcrumb')?.innerText || document.title
-          const m = b.match(/([A-Z]{2,4}\s*\d{3})/i)
-          return m ? m[1].replace(/\s+/g, '').toUpperCase() : 'UNKNOWN'
+    const detectedCode = await page.evaluate(() => {
+      const b = document.querySelector('.breadcrumb')?.innerText || document.title || ''
+      const m = b.match(/([A-Z]{2,4}\s*\d{3})/i)
+      return m ? m[1].replace(/\s+/g, '').toUpperCase() : 'UNKNOWN'
+    })
+
+    await log(runId, `Course code: ${detectedCode}, URL: ${page.url()}`)
+
+    // Handle attempt start — keep trying until we reach attempt.php
+    let attempts = 0
+    while (!page.url().includes('attempt.php') && attempts < 3) {
+      attempts++
+
+      // Look for any submit/start button
+      const btn = await page.$('input[name="startattempt"], input[type="submit"], button[type="submit"]')
+      if (btn) {
+        const btnText = await page.evaluate(b => b.value || b.innerText, btn)
+        await log(runId, `Clicking button: ${btnText}`)
+        await Promise.all([
+          page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }),
+          btn.click()
+        ])
+        await log(runId, `After click URL: ${page.url()}`)
+      } else {
+        // Check for "Continue last attempt" link
+        const continueLink = await page.$('a[href*="attempt.php"]')
+        if (continueLink) {
+          const href = await page.evaluate(a => a.href, continueLink)
+          await log(runId, `Continuing attempt: ${href}`)
+          await page.goto(href, { waitUntil: 'domcontentloaded', timeout: 20000 })
+        } else {
+          await log(runId, 'No button or continue link found')
+          break
+        }
+      }
+    }
+
+    await log(runId, `Final URL: ${page.url()}`)
+
+    // Wait for questions
+    try {
+      await page.waitForSelector('.que', { timeout: 8000 })
+      await log(runId, '.que elements found!')
+    } catch (_) {
+      await log(runId, 'No .que elements — checking page structure')
+      const info = await page.evaluate(() => ({
+        title: document.title,
+        queCount: document.querySelectorAll('.que').length,
+        formCount: document.querySelectorAll('form').length,
+        bodySnippet: document.body.innerText.slice(0, 200)
+      }))
+      await log(runId, `Page info: ${JSON.stringify(info)}`)
+    }
+
+    // Extract questions
+    const questions = []
+    let hasNext = true
+    let qi = 1
+
+    while (hasNext) {
+      const pqs = await page.evaluate((si) => {
+        const qEls = document.querySelectorAll('.que')
+        const qs = []
+        qEls.forEach((el) => {
+          const clone = el.cloneNode(true)
+          clone.querySelectorAll('.answer, .outcome, .comment, input, button').forEach(e => e.remove())
+          const qt = clone.querySelector('.qtext, .questiontext, .formulation')?.innerText?.trim() || ''
+          const opts = []
+          el.querySelectorAll('.answer div.r0, .answer div.r1, .answer label').forEach(o => {
+            const oc = o.cloneNode(true)
+            oc.querySelectorAll('input, .answernumber').forEach(e => e.remove())
+            const t = oc.innerText?.trim()
+            if (t && t.length > 0 && !t.match(/^[a-d]\.?$/i)) opts.push(t)
+          })
+          if (qt.length > 5) qs.push({ questionText: qt, options: opts, index: si + qs.length })
         })
+        return qs
+      }, qi)
 
-        await log(runId, `📖 Scraping ${detectedCode}...`)
+      questions.push(...pqs)
+      qi += pqs.length
 
-        if (!page.url().includes('attempt.php')) {
-          const btn = await page.$('input[name="startattempt"]')
-          if (btn) {
-            await Promise.all([
-              page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
-              btn.click()
-            ])
-            const confirm = await page.$('button[type="submit"]')
-            if (confirm && !page.url().includes('attempt.php')) {
-              await Promise.all([
-                page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
-                confirm.click()
-              ])
-            }
-          }
-        }
+      const nextBtn = await page.$('input[name="next"], .mod_quiz-next-nav')
+      if (nextBtn && pqs.length > 0) {
+        await Promise.all([
+          page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }),
+          nextBtn.click()
+        ])
+      } else {
+        hasNext = false
+      }
+    }
 
-        try { await page.waitForSelector('.que', { timeout: 8000 }) } catch (_) {}
-
-        const questions = []
-        let hasNext = true
-        let qi = 1
-
-        while (hasNext) {
-          const pqs = await page.evaluate((si) => {
-            return Array.from(document.querySelectorAll('.que')).map(el => {
-              const clone = el.cloneNode(true)
-              clone.querySelectorAll('.answer, .outcome, input, button').forEach(e => e.remove())
-              const qt = clone.querySelector('.qtext, .questiontext, .formulation')?.innerText?.trim() || ''
-              const opts = []
-              el.querySelectorAll('.answer div.r0, .answer div.r1, .answer label').forEach(o => {
-                const oc = o.cloneNode(true)
-                oc.querySelectorAll('input, .answernumber').forEach(e => e.remove())
-                const t = oc.innerText?.trim()
-                if (t && t.length > 0 && !t.match(/^[a-d]\.?$/i)) opts.push(t)
-              })
-              return qt.length > 5 ? { questionText: qt, options: opts, index: si++ } : null
-            }).filter(Boolean)
-          }, qi)
-
-          questions.push(...pqs)
-          qi += pqs.length
-
-          const nextBtn = await page.$('input[name="next"], .mod_quiz-next-nav')
-          if (nextBtn && pqs.length > 0) {
-            await Promise.all([
-              page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }),
-              nextBtn.click()
-            ])
-          } else {
-            hasNext = false
-          }
-        }
-
-        await log(runId, `✅ ${detectedCode}: ${questions.length} questions found`)
-
+    await log(runId, `✅ ${detectedCode}: ${questions.length} questions found`)
         // Get course from Supabase
         const { data: course } = await supabase
           .from('courses')
