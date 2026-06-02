@@ -10,9 +10,16 @@ app.use(cors())
 
 const SECRET_KEY = process.env.SCRAPER_SECRET || 'noun-tma-secret-2024-olakunle'
 
+const ws = require('ws')
+
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
+  process.env.SUPABASE_SERVICE_KEY,
+  {
+    realtime: {
+      transport: ws
+    }
+  }
 )
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
