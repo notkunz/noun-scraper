@@ -396,65 +396,67 @@ await log(runId, `🔗 First 10 links: ${bodySnippet}`)
 
 
     const roundNumber = tmaRound.replace('TMA', '')
-await log(runId, '🔄 Loading dashboard...')
-await page.goto('https://elearn.nou.edu.ng/my/', {
+await log(runId, '🔄 Loading courses page...')
+
+// Go directly to courses page instead of dashboard
+await page.goto('https://elearn.nou.edu.ng/my/courses.php', {
   waitUntil: 'domcontentloaded',
   timeout: 45000
 })
 
-// Wait for course links to dynamically load
+// Wait for course links
 try {
-  await page.waitForSelector('a[href*="/mod/quiz/"]', { timeout: 15000 })
-  await log(runId, '✅ Course links loaded')
-} catch (_) {
-  await log(runId, '⚠️ No quiz links appeared — trying scroll approach')
-  // Scroll to trigger lazy loading
-  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-  await new Promise(r => setTimeout(r, 3000))
-  
-  // Try clicking "My Courses" if dashboard has tabs
-  const myCoursesBtn = await page.$('[data-region="my-courses"], #nav-courses, a[href*="mycourses"]')
-  if (myCoursesBtn) {
-    await myCoursesBtn.click()
-    await new Promise(r => setTimeout(r, 2000))
+  await page.waitForSelector('a[href*="/course/view"]', { timeout: 10000 })
+} catch (_) {}
+
+// Get all course links
+const courseLinks = await page.evaluate(() => {
+  return Array.from(document.querySelectorAll('a[href*="/course/view"]'))
+    .map(a => ({ href: a.href, text: a.innerText.trim() }))
+    .filter(l => l.text.length > 0)
+    .slice(0, 30)
+})
+
+await log(runId, `📚 Found ${courseLinks.length} courses`)
+
+// Now visit each course to find TMA links
+const quizLinks = []
+
+for (const course of courseLinks) {
+  try {
+    await page.goto(course.href, { waitUntil: 'domcontentloaded', timeout: 20000 })
+    
+    const courseQuizLinks = await page.evaluate((roundNum) => {
+      return Array.from(document.querySelectorAll('a[href*="/mod/quiz/"]'))
+        .map(a => ({ href: a.href, text: a.innerText.trim() }))
+        .filter(l => {
+          const text = l.text.toLowerCase()
+          const isTMA = text.includes('tma') || text.includes('tutor marked')
+          const exactRound = new RegExp(`tma\\s*${roundNum}(\\b|\\s|$)`, 'i').test(text) ||
+            new RegExp(`tutor marked assignment\\s*${roundNum}(\\b|\\s|$)`, 'i').test(text)
+          return isTMA && exactRound
+        })
+    }, roundNumber)
+
+    if (courseQuizLinks.length > 0) {
+      await log(runId, `✅ Found ${tmaRound} in ${course.text}`)
+      quizLinks.push(...courseQuizLinks)
+    }
+  } catch (e) {
+    console.log('Error checking course:', course.text, e.message)
   }
 }
-// Debug — log what quiz links exist on the page
-const allLinks = await page.evaluate(() => {
-  return Array.from(document.querySelectorAll('a[href*="/mod/quiz/"]'))
-    .map(a => ({ href: a.href, text: a.innerText.trim() }))
-    .slice(0, 20)
-})
-console.log('ALL quiz links found:', JSON.stringify(allLinks))
-await log(runId, `🔍 Found ${allLinks.length} total quiz links`)
-if (allLinks.length > 0) {
-  await log(runId, `First link: ${allLinks[0].text}`)
+
+await log(runId, `📚 Found ${quizLinks.length} ${tmaRound} link(s) total`)
+
+if (quizLinks.length === 0) {
+  await browser.close()
+  await supabase.from('vip_runs').update({
+    status: 'failed',
+    error_message: `No ${tmaRound} found. Make sure your TMA is open on NOUN portal.`
+  }).eq('id', runId)
+  return
 }
-
-    const quizLinks = await page.evaluate((roundNum) => {
-    const links = Array.from(document.querySelectorAll('a[href*="/mod/quiz/"]'))
-     return links
-    .map(a => ({ href: a.href, text: a.innerText.trim() }))
-    .filter(l => {
-      const text = l.text.toLowerCase()
-      const isTMA = text.includes('tma') || text.includes('tutor marked')
-      const exactRound = new RegExp(`tma\\s*${roundNum}(\\b|\\s|$)`, 'i').test(text) ||
-        new RegExp(`tutor marked assignment\\s*${roundNum}(\\b|\\s|$)`, 'i').test(text)
-      return isTMA && exactRound
-    })
-    .slice(0, 30)
-}, roundNumber)
-
-    await log(runId, `📚 Found ${quizLinks.length} ${tmaRound} link(s)`)
-
-    if (quizLinks.length === 0) {
-      await browser.close()
-      await supabase.from('vip_runs').update({
-        status: 'failed',
-        error_message: `No ${tmaRound} found. Make sure TMA is open on NOUN portal.`
-      }).eq('id', runId)
-      return
-    }
 
     // Deduct token
     await supabase.rpc('debit_token_wallet', { p_user_id: userId, p_amount: 1 })
