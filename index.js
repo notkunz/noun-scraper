@@ -368,9 +368,21 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
     const roundNumber = tmaRound.replace('TMA', '')
     await log(runId, 'Loading dashboard...')
     await page.goto('https://elearn.nou.edu.ng/my/', {
-      waitUntil: 'networkidle0',
-     timeout: 45000
-    })
+  waitUntil: 'networkidle0',
+  timeout: 45000
+})
+
+// Debug — log what quiz links exist on the page
+const allLinks = await page.evaluate(() => {
+  return Array.from(document.querySelectorAll('a[href*="/mod/quiz/"]'))
+    .map(a => ({ href: a.href, text: a.innerText.trim() }))
+    .slice(0, 20)
+})
+console.log('ALL quiz links found:', JSON.stringify(allLinks))
+await log(runId, `🔍 Found ${allLinks.length} total quiz links`)
+if (allLinks.length > 0) {
+  await log(runId, `First link: ${allLinks[0].text}`)
+}
 
     const quizLinks = await page.evaluate((roundNum) => {
     const links = Array.from(document.querySelectorAll('a[href*="/mod/quiz/"]'))
