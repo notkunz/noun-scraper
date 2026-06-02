@@ -222,9 +222,11 @@ app.post('/scrape-tma', async (req, res) => {
 // Full TMA endpoint — scrape + answer + save
 app.post('/run-full-tma', async (req, res) => {
   const { matric, password, secret, tma_round, run_id, user_id } = req.body
+/**/ console.log('run-full-tma called, run_id:', run_id)
   if (secret !== SECRET_KEY) return res.status(401).json({ error: 'Unauthorized' })
 
   res.json({ status: 'started', run_id })
+  /**/console.log('Response sent, starting background job...')
   runFullTMA(matric, password, tma_round, run_id, user_id)
 })
 
@@ -296,6 +298,19 @@ RULES:
 }
 
 async function runFullTMA(matric, password, tmaRound, runId, userId) {
+/**/    console.log('runFullTMA called with runId:', runId)
+  try {
+    const { error: updateError } = await supabase
+      .from('vip_runs')
+      .update({ status: 'running' })
+      .eq('id', runId)
+    console.log('Status update error:', updateError)
+    await log(runId, 'Logging into NOUN portal...')
+  } catch (e) {
+    console.error('Error updating run status:', e.message)
+    return
+  }
+/**/
   let browser = null
   try {
     await supabase.from('vip_runs').update({ status: 'running' }).eq('id', runId)
