@@ -365,36 +365,6 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
 
     await log(runId, '✅ Login successful')
 
-
-
-
-
-
-
-
-    // Take screenshot and log page title for debugging
-const pageTitle = await page.title()
-const pageUrl = page.url()
-await log(runId, `📄 Dashboard title: ${pageTitle}`)
-await log(runId, `🔗 Dashboard URL: ${pageUrl}`)
-
-// Log page HTML snippet to see what's there
-const bodySnippet = await page.evaluate(() => {
-  const links = document.querySelectorAll('a')
-  return Array.from(links).slice(0, 10).map(a => a.href + ' | ' + a.innerText.trim().slice(0, 30)).join(' || ')
-})
-await log(runId, `🔗 First 10 links: ${bodySnippet}`)
-
-
-
-
-
-
-
-
-
-
-
     const roundNumber = tmaRound.replace('TMA', '')
 await log(runId, '🔄 Loading courses page...')
 
