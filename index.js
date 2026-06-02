@@ -286,11 +286,17 @@ app.listen(PORT, () => {
 
 const { createClient } = require('@supabase/supabase-js')
 const Groq = require('groq-sdk')
+const ws = require('ws')
 
 // Add at top after requires
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
+  process.env.SUPABASE_SERVICE_KEY,
+  {
+    realtime: {
+      transport: ws
+    }
+  }
 )
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
