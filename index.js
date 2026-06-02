@@ -366,20 +366,25 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
     await log(runId, '✅ Login successful')
 
     const roundNumber = tmaRound.replace('TMA', '')
+    await log(runId, 'Loading dashboard...')
     await page.goto('https://elearn.nou.edu.ng/my/', {
-      waitUntil: 'networkidle0', timeout: 45000
+      waitUntil: 'networkidle0',
+     timeout: 45000
     })
 
-    const quizLinks = await page.evaluate((rn) => {
-      return Array.from(document.querySelectorAll('a[href*="/mod/quiz/"]'))
-        .map(a => ({ href: a.href, text: a.innerText.trim() }))
-        .filter(l => {
-          const t = l.text.toLowerCase()
-          return (t.includes('tma') || t.includes('tutor marked')) &&
-            new RegExp(`tma\\s*${rn}(\\b|\\s|$)`, 'i').test(t)
-        })
-        .slice(0, 30)
-    }, roundNumber)
+    const quizLinks = await page.evaluate((roundNum) => {
+    const links = Array.from(document.querySelectorAll('a[href*="/mod/quiz/"]'))
+     return links
+    .map(a => ({ href: a.href, text: a.innerText.trim() }))
+    .filter(l => {
+      const text = l.text.toLowerCase()
+      const isTMA = text.includes('tma') || text.includes('tutor marked')
+      const exactRound = new RegExp(`tma\\s*${roundNum}(\\b|\\s|$)`, 'i').test(text) ||
+        new RegExp(`tutor marked assignment\\s*${roundNum}(\\b|\\s|$)`, 'i').test(text)
+      return isTMA && exactRound
+    })
+    .slice(0, 30)
+}, roundNumber)
 
     await log(runId, `📚 Found ${quizLinks.length} ${tmaRound} link(s)`)
 
