@@ -458,6 +458,22 @@ if (quizLinks.length === 0) {
   return
 }
 
+
+
+// After finding courseLinks, check first course for ALL links
+if (courseLinks.length > 0) {
+  await page.goto(courseLinks[0].href, { waitUntil: 'domcontentloaded', timeout: 20000 })
+  
+  const allCourseLinks = await page.evaluate(() => {
+    return Array.from(document.querySelectorAll('a'))
+      .map(a => ({ href: a.href, text: a.innerText.trim() }))
+      .filter(l => l.text.length > 0 && l.href.includes('elearn'))
+      .slice(0, 20)
+  })
+  
+  await log(runId, `🔍 First course (${courseLinks[0].text}) links: ${JSON.stringify(allCourseLinks.slice(0, 5))}`)
+}
+
     // Deduct token
     await supabase.rpc('debit_token_wallet', { p_user_id: userId, p_amount: 1 })
     await supabase.from('token_transactions').insert({
