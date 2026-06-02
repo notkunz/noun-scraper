@@ -365,13 +365,60 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
 
     await log(runId, '✅ Login successful')
 
+
+
+
+
+
+
+
+    // Take screenshot and log page title for debugging
+const pageTitle = await page.title()
+const pageUrl = page.url()
+await log(runId, `📄 Dashboard title: ${pageTitle}`)
+await log(runId, `🔗 Dashboard URL: ${pageUrl}`)
+
+// Log page HTML snippet to see what's there
+const bodySnippet = await page.evaluate(() => {
+  const links = document.querySelectorAll('a')
+  return Array.from(links).slice(0, 10).map(a => a.href + ' | ' + a.innerText.trim().slice(0, 30)).join(' || ')
+})
+await log(runId, `🔗 First 10 links: ${bodySnippet}`)
+
+
+
+
+
+
+
+
+
+
+
     const roundNumber = tmaRound.replace('TMA', '')
-    await log(runId, 'Loading dashboard...')
-    await page.goto('https://elearn.nou.edu.ng/my/', {
-  waitUntil: 'networkidle0',
+await log(runId, '🔄 Loading dashboard...')
+await page.goto('https://elearn.nou.edu.ng/my/', {
+  waitUntil: 'domcontentloaded',
   timeout: 45000
 })
 
+// Wait for course links to dynamically load
+try {
+  await page.waitForSelector('a[href*="/mod/quiz/"]', { timeout: 15000 })
+  await log(runId, '✅ Course links loaded')
+} catch (_) {
+  await log(runId, '⚠️ No quiz links appeared — trying scroll approach')
+  // Scroll to trigger lazy loading
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+  await new Promise(r => setTimeout(r, 3000))
+  
+  // Try clicking "My Courses" if dashboard has tabs
+  const myCoursesBtn = await page.$('[data-region="my-courses"], #nav-courses, a[href*="mycourses"]')
+  if (myCoursesBtn) {
+    await myCoursesBtn.click()
+    await new Promise(r => setTimeout(r, 2000))
+  }
+}
 // Debug — log what quiz links exist on the page
 const allLinks = await page.evaluate(() => {
   return Array.from(document.querySelectorAll('a[href*="/mod/quiz/"]'))
