@@ -693,6 +693,19 @@ RULES:
               options: q.options, answer: '', source: 'not_found'
             })
           }
+              if (source === 'course_material' && course?.id && answer) {
+  const { error: qbError } = await supabase
+    .from('question_bank')
+    .insert({
+      course_id: course.id,
+      question_text: q.questionText,
+      answer_text: answer,
+      source: 'course_material',
+      contributed_by: userId
+    })
+  if (qbError) console.log('QB insert error:', qbError.message)
+  else console.log('Saved to QB:', q.questionText.slice(0, 40))
+}
         }
 
       } catch (quizErr) {
@@ -718,17 +731,4 @@ RULES:
     // Refund token
     await supabase.rpc('credit_token_wallet', { p_user_id: userId, p_amount: 1 })
   }
-    if (source === 'course_material' && course?.id && answer) {
-  const { error: qbError } = await supabase
-    .from('question_bank')
-    .insert({
-      course_id: course.id,
-      question_text: q.questionText,
-      answer_text: answer,
-      source: 'course_material',
-      contributed_by: userId
-    })
-  if (qbError) console.log('QB insert error:', qbError.message)
-  else console.log('Saved to QB:', q.questionText.slice(0, 40))
-}
 }
