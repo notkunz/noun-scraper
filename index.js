@@ -369,52 +369,59 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
 await log(runId, '🔄 Loading courses page...')
 
 // Go directly to courses page instead of dashboard
-await page.goto('https://elearn.nou.edu.ng/my/courses.php', {
-  waitUntil: 'domcontentloaded',
-  timeout: 45000
-})
+async function findTMALinks(page, roundNumber) {
+  await page.goto('https://elearn.nou.edu.ng/my/courses.php', {
+    waitUntil: 'domcontentloaded', timeout: 45000
+  })
 
-// Wait for course links
-try {
-  await page.waitForSelector('a[href*="/course/view"]', { timeout: 10000 })
-} catch (_) {}
-
-// Get all course links
-const courseLinks = await page.evaluate(() => {
-  return Array.from(document.querySelectorAll('a[href*="/course/view"]'))
-    .map(a => ({ href: a.href, text: a.innerText.trim() }))
-    .filter(l => l.text.length > 0)
-    .slice(0, 30)
-})
-
-await log(runId, `📚 Found ${courseLinks.length} courses`)
-
-// Now visit each course to find TMA links
-const quizLinks = []
-
-for (const course of courseLinks) {
-  try {
-    await page.goto(course.href, { waitUntil: 'domcontentloaded', timeout: 20000 })
-    
-    const courseQuizLinks = await page.evaluate((roundNum) => {
-      return Array.from(document.querySelectorAll('a[href*="/mod/quiz/"]'))
-        .map(a => ({ href: a.href, text: a.innerText.trim() }))
-        .filter(l => {
-          const text = l.text.toLowerCase()
-          const isTMA = text.includes('tma') || text.includes('tutor marked')
-          const exactRound = new RegExp(`tma\\s*${roundNum}(\\b|\\s|$)`, 'i').test(text) ||
-            new RegExp(`tutor marked assignment\\s*${roundNum}(\\b|\\s|$)`, 'i').test(text)
-          return isTMA && exactRound
-        })
-    }, roundNumber)
-
-    if (courseQuizLinks.length > 0) {
-      await log(runId, `✅ Found ${tmaRound} in ${course.text}`)
-      quizLinks.push(...courseQuizLinks)
-    }
-  } catch (e) {
-    console.log('Error checking course:', course.text, e.message)
+  // Scroll down multiple times to load all courses
+  for (let i = 0; i < 5; i++) {
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+    await new Promise(r => setTimeout(r, 1000))
   }
+
+  try {
+    await page.waitForSelector('a[href*="/course/view"]', { timeout: 10000 })
+  } catch (_) {}
+
+  // Get ALL unique course links
+  const courseLinks = await page.evaluate(() => {
+    const seen = new Set()
+    return Array.from(document.querySelectorAll('a[href*="/course/view"]'))
+      .map(a => ({ href: a.href.split('#')[0], text: a.innerText.trim() }))
+      .filter(l => {
+        if (!l.text || l.text.length < 2 || seen.has(l.href)) return false
+        seen.add(l.href)
+        return true
+      })
+  })
+
+  const quizLinks = []
+
+  for (const course of courseLinks) {
+    try {
+      await page.goto(course.href, { waitUntil: 'domcontentloaded', timeout: 20000 })
+
+      const found = await page.evaluate((roundNum) => {
+        return Array.from(document.querySelectorAll('a[href*="/mod/quiz/"]'))
+          .map(a => ({ href: a.href, text: a.innerText.trim() }))
+          .filter(l => {
+            const text = l.text.toLowerCase()
+            const isTMA = text.includes('tma') || text.includes('tutor marked')
+            const exactRound =
+              new RegExp(`tma\\s*${roundNum}(\\b|\\s|$)`, 'i').test(text) ||
+              new RegExp(`tutor marked assignment\\s*${roundNum}(\\b|\\s|$)`, 'i').test(text)
+            return isTMA && exactRound
+          })
+      }, roundNumber)
+
+      if (found.length > 0) quizLinks.push(...found)
+    } catch (e) {
+      console.log('Error checking course:', e.message)
+    }
+  }
+
+  return { quizLinks, totalCourses: courseLinks.length }
 }
 
 await log(runId, `📚 Found ${quizLinks.length} ${tmaRound} link(s) total`)
@@ -457,43 +464,58 @@ if (courseLinks.length > 0) {
 for (const quiz of quizLinks) {
   try {
     await log(runId, `📖 Scraping ${quiz.text}...`)
-    await page.goto(quiz.href, { waitUntil: 'domcontentloaded', timeout: 30000 })
+// Navigate to quiz
+await page.goto(quiz.href, { waitUntil: 'domcontentloaded', timeout: 30000 })
+await new Promise(r => setTimeout(r, 1000)) // small wait for page to settle
 
-    const detectedCode = await page.evaluate(() => {
-      const b = document.querySelector('.breadcrumb')?.innerText || document.title || ''
-      const m = b.match(/([A-Z]{2,4}\s*\d{3})/i)
-      return m ? m[1].replace(/\s+/g, '').toUpperCase() : 'UNKNOWN'
-    })
+const detectedCode = await page.evaluate(() => {
+  const b = document.querySelector('.breadcrumb')?.innerText || document.title || ''
+  const m = b.match(/([A-Z]{2,4}\s*\d{3})/i)
+  return m ? m[1].replace(/\s+/g, '').toUpperCase() : 'UNKNOWN'
+})
 
-    await log(runId, `Course code: ${detectedCode}, URL: ${page.url()}`)
-
-    // Handle attempt start — keep trying until we reach attempt.php
+// Navigate to attempt
 if (!page.url().includes('attempt.php')) {
-  let attempts = 0
-  while (!page.url().includes('attempt.php') && attempts < 3) {
-    attempts++
-    const btn = await page.$('input[name="startattempt"], input[type="submit"], button[type="submit"]')
-    if (btn) {
-      const btnText = await page.evaluate(b => b.value || b.innerText, btn)
-      await log(runId, `Clicking button: ${btnText}`)
+  try {
+    // Wait for button to be ready
+    await page.waitForSelector('input[name="startattempt"], input[type="submit"], button[type="submit"], a[href*="attempt.php"]', { timeout: 5000 })
+  } catch (_) {}
+
+  const btn = await page.$('input[name="startattempt"]')
+  if (btn) {
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
+      btn.click()
+    ])
+  }
+
+  // Confirm page
+  if (!page.url().includes('attempt.php')) {
+    const confirmBtn = await page.$('button[type="submit"], input[type="submit"]')
+    if (confirmBtn) {
       await Promise.all([
-        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }),
-        btn.click()
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
+        confirmBtn.click()
       ])
-      await log(runId, `After click URL: ${page.url()}`)
-    } else {
-      const continueLink = await page.$('a[href*="attempt.php"]')
-      if (continueLink) {
-        const href = await page.evaluate(a => a.href, continueLink)
-        await log(runId, `Continuing attempt: ${href}`)
-        await page.goto(href, { waitUntil: 'domcontentloaded', timeout: 20000 })
-      } else {
-        await log(runId, 'No button or continue link found')
-        break
-      }
+    }
+  }
+
+  // Continue existing attempt
+  if (!page.url().includes('attempt.php')) {
+    const continueLink = await page.$('a[href*="attempt.php"]')
+    if (continueLink) {
+      const href = await page.evaluate(a => a.href, continueLink)
+      await page.goto(href, { waitUntil: 'domcontentloaded', timeout: 30000 })
     }
   }
 }
+
+// Always go to page 0
+if (page.url().includes('attempt.php') && page.url().includes('&page=')) {
+  const base = page.url().split('&page=')[0]
+  await page.goto(`${base}&page=0`, { waitUntil: 'domcontentloaded', timeout: 20000 })
+}
+
 
 // ALWAYS go to page 0 of the attempt to start from the beginning
 const currentUrl = page.url()
@@ -565,11 +587,12 @@ await log(runId, `Final URL: ${page.url()}`)
 
     await log(runId, `✅ ${detectedCode}: ${questions.length} questions found`)
         // Get course from Supabase
-        const { data: course } = await supabase
-          .from('courses')
-          .select('id, shared_material_code, course_code')
-          .ilike('course_code', `%${detectedCode}%`)
-          .limit(1).single()
+ const { data: course } = await supabase
+  .from('courses')
+  .select('id, shared_material_code, course_code')
+  .or(`course_code.ilike.%${detectedCode}%,course_code.ilike.%${detectedCode.replace(/([A-Z]+)(\d+)/, '$1 $2')}%`)
+  .limit(1)
+  .single()
 
         const materialCode = course?.shared_material_code || detectedCode
 
@@ -695,4 +718,17 @@ RULES:
     // Refund token
     await supabase.rpc('credit_token_wallet', { p_user_id: userId, p_amount: 1 })
   }
+    if (source === 'course_material' && course?.id && answer) {
+  const { error: qbError } = await supabase
+    .from('question_bank')
+    .insert({
+      course_id: course.id,
+      question_text: q.questionText,
+      answer_text: answer,
+      source: 'course_material',
+      contributed_by: userId
+    })
+  if (qbError) console.log('QB insert error:', qbError.message)
+  else console.log('Saved to QB:', q.questionText.slice(0, 40))
+}
 }
