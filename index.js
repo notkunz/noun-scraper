@@ -468,35 +468,46 @@ for (const quiz of quizLinks) {
     await log(runId, `Course code: ${detectedCode}, URL: ${page.url()}`)
 
     // Handle attempt start — keep trying until we reach attempt.php
-    let attempts = 0
-    while (!page.url().includes('attempt.php') && attempts < 3) {
-      attempts++
-
-      // Look for any submit/start button
-      const btn = await page.$('input[name="startattempt"], input[type="submit"], button[type="submit"]')
-      if (btn) {
-        const btnText = await page.evaluate(b => b.value || b.innerText, btn)
-        await log(runId, `Clicking button: ${btnText}`)
-        await Promise.all([
-          page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }),
-          btn.click()
-        ])
-        await log(runId, `After click URL: ${page.url()}`)
+if (!page.url().includes('attempt.php')) {
+  let attempts = 0
+  while (!page.url().includes('attempt.php') && attempts < 3) {
+    attempts++
+    const btn = await page.$('input[name="startattempt"], input[type="submit"], button[type="submit"]')
+    if (btn) {
+      const btnText = await page.evaluate(b => b.value || b.innerText, btn)
+      await log(runId, `Clicking button: ${btnText}`)
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }),
+        btn.click()
+      ])
+      await log(runId, `After click URL: ${page.url()}`)
+    } else {
+      const continueLink = await page.$('a[href*="attempt.php"]')
+      if (continueLink) {
+        const href = await page.evaluate(a => a.href, continueLink)
+        await log(runId, `Continuing attempt: ${href}`)
+        await page.goto(href, { waitUntil: 'domcontentloaded', timeout: 20000 })
       } else {
-        // Check for "Continue last attempt" link
-        const continueLink = await page.$('a[href*="attempt.php"]')
-        if (continueLink) {
-          const href = await page.evaluate(a => a.href, continueLink)
-          await log(runId, `Continuing attempt: ${href}`)
-          await page.goto(href, { waitUntil: 'domcontentloaded', timeout: 20000 })
-        } else {
-          await log(runId, 'No button or continue link found')
-          break
-        }
+        await log(runId, 'No button or continue link found')
+        break
       }
     }
+  }
+}
 
-    await log(runId, `Final URL: ${page.url()}`)
+// ALWAYS go to page 0 of the attempt to start from the beginning
+const currentUrl = page.url()
+if (currentUrl.includes('attempt.php')) {
+  const baseAttemptUrl = currentUrl.split('&page=')[0]
+  if (currentUrl.includes('&page=') && !currentUrl.includes('&page=0')) {
+    await log(runId, `Navigating to page 0 of attempt`)
+    await page.goto(`${baseAttemptUrl}&page=0`, {
+      waitUntil: 'domcontentloaded', timeout: 20000
+    })
+  }
+}
+
+await log(runId, `Final URL: ${page.url()}`)
 
     // Wait for questions
     try {
