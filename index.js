@@ -207,16 +207,31 @@ async function navigateToAttempt(page, runId) {
 }
 
 async function scrapeQuestions(page) {
-  try {
-    await page.waitForSelector('.que', { timeout: 10000 })
-  } catch (_) {
-    // Log what's actually on the page
+  const url = page.url()
+  console.log('scrapeQuestions called, URL:', url)
+
+  // Wait longer and try multiple times
+  let queCount = 0
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await new Promise(r => setTimeout(r, 2000))
+    queCount = await page.evaluate(() => document.querySelectorAll('.que').length)
+    console.log(`Attempt ${attempt + 1}: found ${queCount} .que elements`)
+    if (queCount > 0) break
+    
+    // Scroll to trigger lazy loading
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+    await new Promise(r => setTimeout(r, 500))
+    await page.evaluate(() => window.scrollTo(0, 0))
+  }
+
+  if (queCount === 0) {
     const info = await page.evaluate(() => ({
+      title: document.title,
       url: location.href,
-      queCount: document.querySelectorAll('.que').length,
-      bodyText: document.body.innerText.slice(0, 200)
+      bodySnippet: document.body.innerText.slice(0, 300),
+      allClassNames: Array.from(document.querySelectorAll('[class]')).map(e => e.className).join(' ').slice(0, 200)
     }))
-    console.log('No .que found:', JSON.stringify(info))
+    console.log('Page info when no questions found:', JSON.stringify(info))
     return []
   }
 
@@ -243,6 +258,7 @@ async function scrapeQuestions(page) {
       }).filter(Boolean)
     }, qi)
 
+    console.log(`Page ${qi}: extracted ${pqs.length} questions`)
     questions.push(...pqs)
     qi += pqs.length
 
@@ -252,10 +268,7 @@ async function scrapeQuestions(page) {
         page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }),
         nextBtn.click()
       ])
-      // Wait for next page questions to load
-      try {
-        await page.waitForSelector('.que', { timeout: 8000 })
-      } catch (_) {}
+      await new Promise(r => setTimeout(r, 2000))
     } else {
       hasNext = false
     }
