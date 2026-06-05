@@ -216,12 +216,21 @@ async function scrapeQuestions(page) {
   const url = page.url()
   console.log('scrapeQuestions called, URL:', url)
 
-  // Wait longer and try multiple times
-  let queCount = 0
-  for (let attempt = 0; attempt < 5; attempt++) {
-    await new Promise(r => setTimeout(r, 2000))
-    queCount = await page.evaluate(() => document.querySelectorAll('.que').length)
-    console.log(`Attempt ${attempt + 1}: found ${queCount} .que elements`)
+  // Just wait 1 second then go — no retry loop needed
+  await new Promise(r => setTimeout(r, 1000))
+  
+  const queCount = await page.evaluate(() => document.querySelectorAll('.que').length)
+  console.log(`Found ${queCount} .que elements`)
+  
+  if (queCount === 0) {
+    console.log('No questions found on page')
+    return []
+  }
+
+  const questions = []
+  let hasNext = true
+  let qi = 1
+
 if (queCount > 0) {
   const structureDebug = await page.evaluate(() => {
     const el = document.querySelector('.que')
@@ -489,7 +498,7 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
       status: 'failed', error_message: 'Timed out. Please try again.'
     }).eq('id', runId)
     await supabase.rpc('credit_token_wallet', { p_user_id: userId, p_amount: 1 })
-  }, 480000)
+  }, 1200000)
 
   try {
     await supabase.from('vip_runs').update({ status: 'running' }).eq('id', runId)
