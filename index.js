@@ -19,16 +19,12 @@ const supabase = createClient(
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 let isRunning = false
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
 async function launchBrowser() {
   return puppeteer.launch({
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
     headless: true,
-    args: [
-      '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-      '--disable-gpu', '--single-process', '--js-flags=--max-old-space-size=256'
-    ]
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+      '--disable-gpu', '--single-process', '--js-flags=--max-old-space-size=256']
   })
 }
 
@@ -63,7 +59,6 @@ async function findTMALinks(page, roundNumber) {
     waitUntil: 'domcontentloaded', timeout: 45000
   })
 
-  // Scroll to trigger lazy loading
   for (let i = 0; i < 5; i++) {
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
     await new Promise(r => setTimeout(r, 800))
@@ -85,24 +80,17 @@ async function findTMALinks(page, roundNumber) {
   })
 
   console.log(`Found ${courseLinks.length} course links`)
-
   const quizLinks = []
 
   for (const course of courseLinks) {
     try {
       await page.goto(course.href, { waitUntil: 'domcontentloaded', timeout: 20000 })
-      
-      // Wait for page content to load
       await new Promise(r => setTimeout(r, 1500))
-      
-      // Scroll to load all course content
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
       await new Promise(r => setTimeout(r, 500))
 
       const found = await page.evaluate((roundNum) => {
-        // Try multiple selectors
-        const allLinks = Array.from(document.querySelectorAll('a'))
-        return allLinks
+        return Array.from(document.querySelectorAll('a'))
           .map(a => ({ href: a.href, text: a.innerText.trim() }))
           .filter(l => {
             if (!l.href.includes('/mod/quiz/')) return false
@@ -127,92 +115,73 @@ async function findTMALinks(page, roundNumber) {
   return { quizLinks, totalCourses: courseLinks.length }
 }
 
-async function navigateToAttempt(page, runId) {
+async function navigateToAttempt(page) {
   console.log('navigateToAttempt — current URL:', page.url())
-  
-  if (page.url().includes('attempt.php')) {
-    console.log('Already on attempt page')
-    // Still go to page 0
-    if (page.url().includes('&page=')) {
-      const base = page.url().split('&page=')[0]
-      await page.goto(`${base}&page=0`, { waitUntil: 'domcontentloaded', timeout: 20000 })
-    }
-    return
-  }
-
-  await new Promise(r => setTimeout(r, 1000))
-
-  // Log all buttons on page
-  const buttons = await page.evaluate(() => {
-    return Array.from(document.querySelectorAll('input[type="submit"], button[type="submit"], a[href*="attempt"]'))
-      .map(el => ({ tag: el.tagName, name: el.name || '', value: el.value || el.innerText?.trim().slice(0, 30), href: el.href || '' }))
-  })
-  console.log('Buttons on page:', JSON.stringify(buttons))
-
-  const startBtn = await page.$('input[name="startattempt"]')
-  if (startBtn) {
-    console.log('Clicking startattempt...')
-    try {
-      await Promise.all([
-        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
-        startBtn.click()
-      ])
-      console.log('After start:', page.url())
-    } catch (e) {
-      console.log('Start click error:', e.message)
-    }
-  }
 
   if (!page.url().includes('attempt.php')) {
-    const confirmBtn = await page.$('button[type="submit"], input[type="submit"]')
-    if (confirmBtn) {
-      console.log('Clicking confirm...')
+    await new Promise(r => setTimeout(r, 1000))
+
+    const buttons = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll('input[type="submit"], button[type="submit"], a[href*="attempt"]'))
+        .map(el => ({ tag: el.tagName, name: el.name || '', value: el.value || el.innerText?.trim().slice(0, 30), href: el.href || '' }))
+    })
+    console.log('Buttons on page:', JSON.stringify(buttons))
+
+    const startBtn = await page.$('input[name="startattempt"]')
+    if (startBtn) {
       try {
         await Promise.all([
           page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
-          confirmBtn.click()
+          startBtn.click()
         ])
-        console.log('After confirm:', page.url())
+        console.log('After start:', page.url())
       } catch (e) {
-        console.log('Confirm click error:', e.message)
+        console.log('Start click error:', e.message)
+      }
+    }
+
+    if (!page.url().includes('attempt.php')) {
+      const confirmBtn = await page.$('button[type="submit"], input[type="submit"]')
+      if (confirmBtn) {
+        try {
+          await Promise.all([
+            page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
+            confirmBtn.click()
+          ])
+          console.log('After confirm:', page.url())
+        } catch (e) {
+          console.log('Confirm click error:', e.message)
+        }
+      }
+    }
+
+    if (!page.url().includes('attempt.php')) {
+      const continueLink = await page.$('a[href*="attempt.php"]')
+      if (continueLink) {
+        const href = await page.evaluate(a => a.href, continueLink)
+        await page.goto(href, { waitUntil: 'domcontentloaded', timeout: 30000 })
       }
     }
   }
 
-  if (!page.url().includes('attempt.php')) {
-    const continueLink = await page.$('a[href*="attempt.php"]')
-    if (continueLink) {
-      const href = await page.evaluate(a => a.href, continueLink)
-      console.log('Following continue link:', href)
-      await page.goto(href, { waitUntil: 'domcontentloaded', timeout: 30000 })
-    } else {
-      console.log('No attempt navigation found — final URL:', page.url())
-    }
+  // Always go to page 0
+  if (page.url().includes('attempt.php')) {
+    const baseUrl = page.url().split('&page=')[0]
+    await page.goto(`${baseUrl}&page=0`, { waitUntil: 'domcontentloaded', timeout: 20000 })
+    await new Promise(r => setTimeout(r, 1000))
   }
 
-// At the end of navigateToAttempt, replace the page-0 check with:
-if (page.url().includes('attempt.php')) {
-  const currentUrl = page.url()
-  const baseUrl = currentUrl.split('&page=')[0]
-  // Always go to page 0 regardless of whether &page= exists
-  await page.goto(`${baseUrl}&page=0`, { 
-    waitUntil: 'domcontentloaded', 
-    timeout: 20000 
-  })
-await new Promise(r => setTimeout(r, 1000))
   console.log('navigateToAttempt done — final URL:', page.url())
 }
 
 async function scrapeQuestions(page) {
-  const url = page.url()
-  console.log('scrapeQuestions called, URL:', url)
+  console.log('scrapeQuestions called, URL:', page.url())
 
-  // Just wait 1 second then go — no retry loop needed
   await new Promise(r => setTimeout(r, 1000))
-  
+
   const queCount = await page.evaluate(() => document.querySelectorAll('.que').length)
   console.log(`Found ${queCount} .que elements`)
-  
+
   if (queCount === 0) {
     console.log('No questions found on page')
     return []
@@ -222,83 +191,38 @@ async function scrapeQuestions(page) {
   let hasNext = true
   let qi = 1
 
-if (queCount > 0) {
-  const structureDebug = await page.evaluate(() => {
-    const el = document.querySelector('.que')
-    if (!el) return 'no .que'
-    // Get all text content after removing .info
-    const clone = el.cloneNode(true)
-    clone.querySelector('.info')?.remove()
-    return {
-      fullText: clone.innerText?.slice(0, 300),
-      hasQtext: !!el.querySelector('.qtext'),
-      hasFormulation: !!el.querySelector('.formulation'),
-      childClasses: Array.from(el.children).map(c => c.className)
-    }
-  })
-  console.log('Structure debug:', JSON.stringify(structureDebug))
-}
-    
-    // Scroll to trigger lazy loading
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-    await new Promise(r => setTimeout(r, 500))
-    await page.evaluate(() => window.scrollTo(0, 0))
-  }
-
-  if (queCount === 0) {
-    const info = await page.evaluate(() => ({
-      title: document.title,
-      url: location.href,
-      bodySnippet: document.body.innerText.slice(0, 300),
-      allClassNames: Array.from(document.querySelectorAll('[class]')).map(e => e.className).join(' ').slice(0, 200)
-    }))
-    console.log('Page info when no questions found:', JSON.stringify(info))
-    return []
-  }
-
-  const questions = []
-  let hasNext = true
-  let qi = 1
-
   while (hasNext) {
-const pqs = await page.evaluate((si) => {
-  // Try standard .que approach first
-  const qEls = document.querySelectorAll('.que')
-  const qs = []
+    const pqs = await page.evaluate((si) => {
+      const qEls = document.querySelectorAll('.que')
+      const qs = []
 
-  qEls.forEach((el, idx) => {
-    // Try finding qtext inside .que
-    let questionText = el.querySelector('.qtext, .questiontext, .formulation')?.innerText?.trim() || ''
-    
-    // If not found inside .que, look at the NEXT sibling or parent content
-    if (!questionText) {
-      const parent = el.closest('.que, .question, [class*="question"]')
-      questionText = parent?.querySelector('.qtext, .questiontext, .formulation, .content p')?.innerText?.trim() || ''
-    }
+      qEls.forEach((el, idx) => {
+        // Try .qtext/.formulation first
+        let questionText = el.querySelector('.qtext, .questiontext, .formulation')?.innerText?.trim() || ''
 
-    // Also try: the text directly after .info div
-    if (!questionText) {
-      const clone = el.cloneNode(true)
-      clone.querySelector('.info')?.remove()
-      clone.querySelectorAll('input, button, .answer, .outcome').forEach(e => e.remove())
-      questionText = clone.innerText?.trim() || ''
-    }
+        // Fallback: remove .info and get remaining text
+        if (!questionText) {
+          const clone = el.cloneNode(true)
+          clone.querySelector('.info')?.remove()
+          clone.querySelectorAll('input, button, .answer, .outcome').forEach(e => e.remove())
+          questionText = clone.innerText?.trim() || ''
+        }
 
-    const opts = []
-    el.querySelectorAll('.answer div.r0, .answer div.r1, .answer label').forEach(o => {
-      const oc = o.cloneNode(true)
-      oc.querySelectorAll('input, .answernumber').forEach(e => e.remove())
-      const t = oc.innerText?.trim()
-      if (t && t.length > 0 && !t.match(/^[a-d]\.?$/i)) opts.push(t)
-    })
+        const opts = []
+        el.querySelectorAll('.answer div.r0, .answer div.r1, .answer label').forEach(o => {
+          const oc = o.cloneNode(true)
+          oc.querySelectorAll('input, .answernumber').forEach(e => e.remove())
+          const t = oc.innerText?.trim()
+          if (t && t.length > 0 && !t.match(/^[a-d]\.?$/i)) opts.push(t)
+        })
 
-    if (questionText && questionText.length > 5) {
-      qs.push({ questionText, options: opts, index: si + idx })
-    }
-  })
+        if (questionText && questionText.length > 5) {
+          qs.push({ questionText, options: opts, index: si + idx })
+        }
+      })
 
-  return qs
-}, qi)
+      return qs
+    }, qi)
 
     console.log(`Page ${qi}: extracted ${pqs.length} questions`)
     questions.push(...pqs)
@@ -310,7 +234,7 @@ const pqs = await page.evaluate((si) => {
         page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }),
         nextBtn.click()
       ])
-      await new Promise(r => setTimeout(r, 2000))
+      await new Promise(r => setTimeout(r, 1000))
     } else {
       hasNext = false
     }
@@ -330,7 +254,6 @@ async function getCourseFromDB(courseCode) {
 }
 
 async function getAnswerForQuestion(questionText, options, materialCode, courseId) {
-  // Check question bank first
   if (courseId) {
     const { data: bank } = await supabase
       .from('question_bank')
@@ -342,7 +265,6 @@ async function getAnswerForQuestion(questionText, options, materialCode, courseI
     if (bank) return { answer: bank.answer_text, source: 'question_bank' }
   }
 
-  // Sliding window material search
   const words = questionText.replace(/[^a-zA-Z\s]/g, ' ').split(' ').filter(w => w.length > 2)
   const phrases = [...words]
   for (let i = 0; i < words.length - 1; i++) phrases.push(`${words[i]} ${words[i+1]}`)
@@ -389,15 +311,13 @@ RULES:
     source: answer === 'ANSWER_NOT_FOUND' ? 'not_found' : (hasMaterial ? 'course_material' : 'internet')
   }
 }
-/* functions*/
+
 async function log(runId, message) {
   console.log(message)
   try {
     await supabase.rpc('append_run_log', { p_run_id: runId, p_message: message })
   } catch (e) {}
 }
-
-// ─── Routes ─────────────────────────────────────────────────────────────────
 
 app.get('/', (req, res) => {
   res.json({ status: 'NOUN Scraper running' })
@@ -429,7 +349,6 @@ app.post('/scrape-tma', async (req, res) => {
     }
 
     const results = []
-
     for (const quiz of quizLinks) {
       try {
         await page.goto(quiz.href, { waitUntil: 'domcontentloaded', timeout: 30000 })
@@ -438,7 +357,7 @@ app.post('/scrape-tma', async (req, res) => {
           const m = b.match(/([A-Z]{2,4}\s*\d{3})/i)
           return m ? m[1].replace(/\s+/g, '').toUpperCase() : 'UNKNOWN'
         })
-        await navigateToAttempt(page, null)
+        await navigateToAttempt(page)
         const questions = await scrapeQuestions(page)
         if (questions.length > 0) {
           results.push({ title: quiz.text, course_code: courseCode, url: quiz.href, questions })
@@ -462,9 +381,8 @@ app.post('/run-full-tma', async (req, res) => {
   if (secret !== SECRET_KEY) return res.status(401).json({ error: 'Unauthorized' })
 
   if (isRunning) {
-    // Update DB to failed so frontend stops polling
     await supabase.from('vip_runs')
-      .update({ status: 'failed', error_message: 'Another TMA is already running. Please wait 2 minutes and try again.' })
+      .update({ status: 'failed', error_message: 'Another TMA is running. Wait 2 minutes and try again.' })
       .eq('id', run_id)
     return res.status(429).json({ error: 'Already running' })
   }
@@ -474,13 +392,10 @@ app.post('/run-full-tma', async (req, res) => {
   runFullTMA(matric, password, tma_round, run_id, user_id)
 })
 
-// ─── Full TMA Runner ─────────────────────────────────────────────────────────
-
 async function runFullTMA(matric, password, tmaRound, runId, userId) {
   isRunning = true
   let browser = null
-  
-  // Hard timeout — force cleanup after 8 minutes
+
   const hardTimeout = setTimeout(async () => {
     console.log('Hard timeout reached — forcing cleanup')
     if (browser) try { await browser.close() } catch (_) {}
@@ -489,7 +404,7 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
       status: 'failed', error_message: 'Timed out. Please try again.'
     }).eq('id', runId)
     await supabase.rpc('credit_token_wallet', { p_user_id: userId, p_amount: 1 })
-  }, 1200000)
+  }, 1200000) // 20 minutes
 
   try {
     await supabase.from('vip_runs').update({ status: 'running' }).eq('id', runId)
@@ -501,10 +416,10 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
     const loggedIn = await loginToNOUN(page, matric, password)
     if (!loggedIn) {
       await browser.close()
+      isRunning = false
+      clearTimeout(hardTimeout)
       await log(runId, 'Invalid NOUN credentials')
-      await supabase.from('vip_runs').update({
-        status: 'failed', error_message: 'Invalid credentials'
-      }).eq('id', runId)
+      await supabase.from('vip_runs').update({ status: 'failed', error_message: 'Invalid credentials' }).eq('id', runId)
       return
     }
 
@@ -514,11 +429,12 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
     await log(runId, 'Loading courses...')
 
     const { quizLinks, totalCourses } = await findTMALinks(page, roundNumber)
-
     await log(runId, `Found ${totalCourses} courses, ${quizLinks.length} have ${tmaRound} open`)
 
     if (quizLinks.length === 0) {
       await browser.close()
+      isRunning = false
+      clearTimeout(hardTimeout)
       await supabase.from('vip_runs').update({
         status: 'failed',
         error_message: `No ${tmaRound} found. Make sure your TMA is open on the NOUN portal.`
@@ -526,7 +442,6 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
       return
     }
 
-    // Check if this is a re-run (same matric + round completed before)
     const { data: previousRun } = await supabase
       .from('vip_runs')
       .select('id')
@@ -549,7 +464,6 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
     }
 
     await log(runId, 'AI is answering questions...')
-
     const allResults = []
 
     for (const quiz of quizLinks) {
@@ -562,9 +476,8 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
           return m ? m[1].replace(/\s+/g, '').toUpperCase() : 'UNKNOWN'
         })
 
-        await navigateToAttempt(page, runId)
+        await navigateToAttempt(page)
         const questions = await scrapeQuestions(page)
-
         await log(runId, `${detectedCode}: ${questions.length} questions found`)
 
         const course = await getCourseFromDB(detectedCode)
@@ -576,7 +489,6 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
               q.questionText, q.options, materialCode, course?.id
             )
 
-            // Save to question bank if from material
             if (source === 'course_material' && course?.id && answer) {
               const { data: existing } = await supabase
                 .from('question_bank')
@@ -586,14 +498,13 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
                 .single()
 
               if (!existing) {
-                const { error: qbErr } = await supabase.from('question_bank').insert({
+                await supabase.from('question_bank').insert({
                   course_id: course.id,
                   question_text: q.questionText,
                   answer_text: answer,
                   source: 'course_material',
                   contributed_by: userId
                 })
-                if (qbErr) console.log('QB error:', qbErr.message)
               }
             }
 
@@ -624,7 +535,7 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
       }
     }
 
-  await browser.close()
+    await browser.close()
     isRunning = false
     clearTimeout(hardTimeout)
     await log(runId, `Done! ${allResults.length} questions answered`)
