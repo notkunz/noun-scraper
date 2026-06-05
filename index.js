@@ -127,52 +127,76 @@ async function findTMALinks(page, roundNumber) {
   return { quizLinks, totalCourses: courseLinks.length }
 }
 
-async function navigateToAttempt(page) {
-  if (page.url().includes('attempt.php')) return
-
-  await new Promise(r => setTimeout(r, 800))
-
-  try {
-    await page.waitForSelector(
-      'input[name="startattempt"], input[type="submit"], button[type="submit"], a[href*="attempt.php"]',
-      { timeout: 5000 }
-    )
-  } catch (_) {}
-
-  // Start attempt button
-  const startBtn = await page.$('input[name="startattempt"]')
-  if (startBtn) {
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
-      startBtn.click()
-    ])
+async function navigateToAttempt(page, runId) {
+  console.log('navigateToAttempt — current URL:', page.url())
+  
+  if (page.url().includes('attempt.php')) {
+    console.log('Already on attempt page')
+    // Still go to page 0
+    if (page.url().includes('&page=')) {
+      const base = page.url().split('&page=')[0]
+      await page.goto(`${base}&page=0`, { waitUntil: 'domcontentloaded', timeout: 20000 })
+    }
+    return
   }
 
-  // Confirm page
-  if (!page.url().includes('attempt.php')) {
-    const confirmBtn = await page.$('button[type="submit"], input[type="submit"]')
-    if (confirmBtn) {
+  await new Promise(r => setTimeout(r, 1000))
+
+  // Log all buttons on page
+  const buttons = await page.evaluate(() => {
+    return Array.from(document.querySelectorAll('input[type="submit"], button[type="submit"], a[href*="attempt"]'))
+      .map(el => ({ tag: el.tagName, name: el.name || '', value: el.value || el.innerText?.trim().slice(0, 30), href: el.href || '' }))
+  })
+  console.log('Buttons on page:', JSON.stringify(buttons))
+
+  const startBtn = await page.$('input[name="startattempt"]')
+  if (startBtn) {
+    console.log('Clicking startattempt...')
+    try {
       await Promise.all([
         page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
-        confirmBtn.click()
+        startBtn.click()
       ])
+      console.log('After start:', page.url())
+    } catch (e) {
+      console.log('Start click error:', e.message)
     }
   }
 
-  // Continue existing attempt
+  if (!page.url().includes('attempt.php')) {
+    const confirmBtn = await page.$('button[type="submit"], input[type="submit"]')
+    if (confirmBtn) {
+      console.log('Clicking confirm...')
+      try {
+        await Promise.all([
+          page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
+          confirmBtn.click()
+        ])
+        console.log('After confirm:', page.url())
+      } catch (e) {
+        console.log('Confirm click error:', e.message)
+      }
+    }
+  }
+
   if (!page.url().includes('attempt.php')) {
     const continueLink = await page.$('a[href*="attempt.php"]')
     if (continueLink) {
       const href = await page.evaluate(a => a.href, continueLink)
+      console.log('Following continue link:', href)
       await page.goto(href, { waitUntil: 'domcontentloaded', timeout: 30000 })
+    } else {
+      console.log('No attempt navigation found — final URL:', page.url())
     }
   }
 
-  // Always go to page 0
   if (page.url().includes('attempt.php') && page.url().includes('&page=')) {
     const base = page.url().split('&page=')[0]
+    console.log('Going to page 0:', `${base}&page=0`)
     await page.goto(`${base}&page=0`, { waitUntil: 'domcontentloaded', timeout: 20000 })
   }
+
+  console.log('navigateToAttempt done — final URL:', page.url())
 }
 
 async function scrapeQuestions(page) {
@@ -339,7 +363,7 @@ app.post('/scrape-tma', async (req, res) => {
           const m = b.match(/([A-Z]{2,4}\s*\d{3})/i)
           return m ? m[1].replace(/\s+/g, '').toUpperCase() : 'UNKNOWN'
         })
-        await navigateToAttempt(page)
+        await navigateToAttempt(page, null)
         const questions = await scrapeQuestions(page)
         if (questions.length > 0) {
           results.push({ title: quiz.text, course_code: courseCode, url: quiz.href, questions })
@@ -463,7 +487,7 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
           return m ? m[1].replace(/\s+/g, '').toUpperCase() : 'UNKNOWN'
         })
 
-        await navigateToAttempt(page)
+        await navigateToAttempt(page, runId)
         const questions = await scrapeQuestions(page)
 
         await log(runId, `${detectedCode}: ${questions.length} questions found`)
