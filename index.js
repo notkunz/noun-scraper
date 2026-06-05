@@ -334,7 +334,7 @@ RULES:
     source: answer === 'ANSWER_NOT_FOUND' ? 'not_found' : (hasMaterial ? 'course_material' : 'internet')
   }
 }
-
+/* functions*/
 async function log(runId, message) {
   console.log(message)
   try {
