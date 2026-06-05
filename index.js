@@ -216,7 +216,13 @@ async function scrapeQuestions(page) {
     await new Promise(r => setTimeout(r, 2000))
     queCount = await page.evaluate(() => document.querySelectorAll('.que').length)
     console.log(`Attempt ${attempt + 1}: found ${queCount} .que elements`)
-    if (queCount > 0) break
+    if (queCount > 0) {
+  const firstQueHTML = await page.evaluate(() => {
+    const el = document.querySelector('.que')
+    return el ? el.innerHTML.slice(0, 500) : 'no .que found'
+  })
+  console.log('First .que HTML:', firstQueHTML)
+}
     
     // Scroll to trigger lazy loading
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
