@@ -197,12 +197,28 @@ async function navigateToAttempt(page, runId) {
   }
 
   console.log('navigateToAttempt done — final URL:', page.url())
+
+  // Wait for attempt page to fully render
+  if (page.url().includes('attempt.php')) {
+    await new Promise(r => setTimeout(r, 2000))
+  }
+
+  console.log('navigateToAttempt done — final URL:', page.url())
 }
 
 async function scrapeQuestions(page) {
   try {
-    await page.waitForSelector('.que', { timeout: 8000 })
-  } catch (_) {}
+    await page.waitForSelector('.que', { timeout: 10000 })
+  } catch (_) {
+    // Log what's actually on the page
+    const info = await page.evaluate(() => ({
+      url: location.href,
+      queCount: document.querySelectorAll('.que').length,
+      bodyText: document.body.innerText.slice(0, 200)
+    }))
+    console.log('No .que found:', JSON.stringify(info))
+    return []
+  }
 
   const questions = []
   let hasNext = true
@@ -236,6 +252,10 @@ async function scrapeQuestions(page) {
         page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }),
         nextBtn.click()
       ])
+      // Wait for next page questions to load
+      try {
+        await page.waitForSelector('.que', { timeout: 8000 })
+      } catch (_) {}
     } else {
       hasNext = false
     }
