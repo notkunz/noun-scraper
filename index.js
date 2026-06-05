@@ -199,16 +199,7 @@ if (page.url().includes('attempt.php')) {
     waitUntil: 'domcontentloaded', 
     timeout: 20000 
   })
-  await new Promise(r => setTimeout(r, 2000))
-}
-console.log('navigateToAttempt done — final URL:', page.url())
-
-
-  // Wait for attempt page to fully render
-  if (page.url().includes('attempt.php')) {
-    await new Promise(r => setTimeout(r, 2000))
-  }
-
+await new Promise(r => setTimeout(r, 1000))
   console.log('navigateToAttempt done — final URL:', page.url())
 }
 
