@@ -190,13 +190,16 @@ async function navigateToAttempt(page, runId) {
     }
   }
 
-  if (page.url().includes('attempt.php') && page.url().includes('&page=')) {
-    const base = page.url().split('&page=')[0]
-    console.log('Going to page 0:', `${base}&page=0`)
-    await page.goto(`${base}&page=0`, { waitUntil: 'domcontentloaded', timeout: 20000 })
-  }
-
-  console.log('navigateToAttempt done — final URL:', page.url())
+// At the very end of navigateToAttempt, replace the existing page-0 check with:
+const finalUrl = page.url()
+if (finalUrl.includes('attempt.php')) {
+  const baseUrl = finalUrl.split('&page=')[0]
+  await page.goto(`${baseUrl}&page=0`, { 
+    waitUntil: 'domcontentloaded', timeout: 20000 
+  })
+  await new Promise(r => setTimeout(r, 2000))
+}
+console.log('navigateToAttempt done — final URL:', page.url())
 
   // Wait for attempt page to fully render
   if (page.url().includes('attempt.php')) {
