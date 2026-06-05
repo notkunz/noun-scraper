@@ -222,12 +222,21 @@ async function scrapeQuestions(page) {
     await new Promise(r => setTimeout(r, 2000))
     queCount = await page.evaluate(() => document.querySelectorAll('.que').length)
     console.log(`Attempt ${attempt + 1}: found ${queCount} .que elements`)
-    if (queCount > 0) {
-  const firstQueHTML = await page.evaluate(() => {
+if (queCount > 0) {
+  const structureDebug = await page.evaluate(() => {
     const el = document.querySelector('.que')
-    return el ? el.innerHTML.slice(0, 500) : 'no .que found'
+    if (!el) return 'no .que'
+    // Get all text content after removing .info
+    const clone = el.cloneNode(true)
+    clone.querySelector('.info')?.remove()
+    return {
+      fullText: clone.innerText?.slice(0, 300),
+      hasQtext: !!el.querySelector('.qtext'),
+      hasFormulation: !!el.querySelector('.formulation'),
+      childClasses: Array.from(el.children).map(c => c.className)
+    }
   })
-  console.log('First .que HTML:', firstQueHTML)
+  console.log('Structure debug:', JSON.stringify(structureDebug))
 }
     
     // Scroll to trigger lazy loading
@@ -252,23 +261,44 @@ async function scrapeQuestions(page) {
   let qi = 1
 
   while (hasNext) {
-    const pqs = await page.evaluate((si) => {
-      return Array.from(document.querySelectorAll('.que')).map((el, idx) => {
-        const clone = el.cloneNode(true)
-        clone.querySelectorAll('.answer, .outcome, .comment, .gradingdetails, input, button, .clearfix').forEach(e => e.remove())
-        const questionText = clone.querySelector('.qtext, .questiontext, .formulation')?.innerText?.trim() || ''
+const pqs = await page.evaluate((si) => {
+  // Try standard .que approach first
+  const qEls = document.querySelectorAll('.que')
+  const qs = []
 
-        const opts = []
-        el.querySelectorAll('.answer div.r0, .answer div.r1, .answer label').forEach(o => {
-          const oc = o.cloneNode(true)
-          oc.querySelectorAll('input, .answernumber').forEach(e => e.remove())
-          const t = oc.innerText?.trim()
-          if (t && t.length > 0 && !t.match(/^[a-d]\.?$/i)) opts.push(t)
-        })
+  qEls.forEach((el, idx) => {
+    // Try finding qtext inside .que
+    let questionText = el.querySelector('.qtext, .questiontext, .formulation')?.innerText?.trim() || ''
+    
+    // If not found inside .que, look at the NEXT sibling or parent content
+    if (!questionText) {
+      const parent = el.closest('.que, .question, [class*="question"]')
+      questionText = parent?.querySelector('.qtext, .questiontext, .formulation, .content p')?.innerText?.trim() || ''
+    }
 
-        return questionText.length > 5 ? { questionText, options: opts, index: si + idx } : null
-      }).filter(Boolean)
-    }, qi)
+    // Also try: the text directly after .info div
+    if (!questionText) {
+      const clone = el.cloneNode(true)
+      clone.querySelector('.info')?.remove()
+      clone.querySelectorAll('input, button, .answer, .outcome').forEach(e => e.remove())
+      questionText = clone.innerText?.trim() || ''
+    }
+
+    const opts = []
+    el.querySelectorAll('.answer div.r0, .answer div.r1, .answer label').forEach(o => {
+      const oc = o.cloneNode(true)
+      oc.querySelectorAll('input, .answernumber').forEach(e => e.remove())
+      const t = oc.innerText?.trim()
+      if (t && t.length > 0 && !t.match(/^[a-d]\.?$/i)) opts.push(t)
+    })
+
+    if (questionText && questionText.length > 5) {
+      qs.push({ questionText, options: opts, index: si + idx })
+    }
+  })
+
+  return qs
+}, qi)
 
     console.log(`Page ${qi}: extracted ${pqs.length} questions`)
     questions.push(...pqs)
