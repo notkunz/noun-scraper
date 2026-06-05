@@ -17,6 +17,7 @@ const supabase = createClient(
   { realtime: { transport: ws } }
 )
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+let isRunning = false
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -62,7 +63,7 @@ async function findTMALinks(page, roundNumber) {
     waitUntil: 'domcontentloaded', timeout: 45000
   })
 
-  // Scroll to load all courses
+  // Scroll to trigger lazy loading
   for (let i = 0; i < 5; i++) {
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
     await new Promise(r => setTimeout(r, 800))
@@ -83,16 +84,28 @@ async function findTMALinks(page, roundNumber) {
       })
   })
 
+  console.log(`Found ${courseLinks.length} course links`)
+
   const quizLinks = []
 
   for (const course of courseLinks) {
     try {
       await page.goto(course.href, { waitUntil: 'domcontentloaded', timeout: 20000 })
+      
+      // Wait for page content to load
+      await new Promise(r => setTimeout(r, 1500))
+      
+      // Scroll to load all course content
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+      await new Promise(r => setTimeout(r, 500))
 
       const found = await page.evaluate((roundNum) => {
-        return Array.from(document.querySelectorAll('a[href*="/mod/quiz/"]'))
+        // Try multiple selectors
+        const allLinks = Array.from(document.querySelectorAll('a'))
+        return allLinks
           .map(a => ({ href: a.href, text: a.innerText.trim() }))
           .filter(l => {
+            if (!l.href.includes('/mod/quiz/')) return false
             const text = l.text.toLowerCase()
             const isTMA = text.includes('tma') || text.includes('tutor marked')
             const exactRound =
@@ -102,9 +115,12 @@ async function findTMALinks(page, roundNumber) {
           })
       }, roundNumber)
 
-      if (found.length > 0) quizLinks.push(...found)
+      if (found.length > 0) {
+        console.log(`Found TMA${roundNumber} in ${course.text}: ${found.length} link(s)`)
+        quizLinks.push(...found)
+      }
     } catch (e) {
-      console.log('Error checking course:', e.message)
+      console.log('Error checking course:', course.text, e.message)
     }
   }
 
@@ -345,6 +361,15 @@ app.post('/scrape-tma', async (req, res) => {
 app.post('/run-full-tma', async (req, res) => {
   const { matric, password, secret, tma_round, run_id, user_id } = req.body
   if (secret !== SECRET_KEY) return res.status(401).json({ error: 'Unauthorized' })
+
+  if (isRunning) {
+    // Update DB to failed so frontend stops polling
+    await supabase.from('vip_runs')
+      .update({ status: 'failed', error_message: 'Another TMA is already running. Please wait 2 minutes and try again.' })
+      .eq('id', run_id)
+    return res.status(429).json({ error: 'Already running' })
+  }
+
   console.log('run-full-tma called, run_id:', run_id)
   res.json({ status: 'started', run_id })
   runFullTMA(matric, password, tma_round, run_id, user_id)
@@ -353,7 +378,20 @@ app.post('/run-full-tma', async (req, res) => {
 // ─── Full TMA Runner ─────────────────────────────────────────────────────────
 
 async function runFullTMA(matric, password, tmaRound, runId, userId) {
+  isRunning = true
   let browser = null
+  
+  // Hard timeout — force cleanup after 8 minutes
+  const hardTimeout = setTimeout(async () => {
+    console.log('Hard timeout reached — forcing cleanup')
+    if (browser) try { await browser.close() } catch (_) {}
+    isRunning = false
+    await supabase.from('vip_runs').update({
+      status: 'failed', error_message: 'Timed out. Please try again.'
+    }).eq('id', runId)
+    await supabase.rpc('credit_token_wallet', { p_user_id: userId, p_amount: 1 })
+  }, 480000)
+
   try {
     await supabase.from('vip_runs').update({ status: 'running' }).eq('id', runId)
     await log(runId, 'Logging into NOUN portal...')
@@ -487,9 +525,10 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
       }
     }
 
-    await browser.close()
+  await browser.close()
+    isRunning = false
+    clearTimeout(hardTimeout)
     await log(runId, `Done! ${allResults.length} questions answered`)
-
     await supabase.from('vip_runs').update({
       status: 'completed',
       results: allResults,
@@ -497,11 +536,10 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
     }).eq('id', runId)
 
   } catch (err) {
+    clearTimeout(hardTimeout)
+    isRunning = false
     console.error('Full TMA error:', err)
     if (browser) try { await browser.close() } catch (_) {}
-    if (err.message?.includes('rate_limit') || err.message?.includes('429')) {
-      await log(runId, 'AI quota reached. Please try again tomorrow.')
-    }
     await supabase.from('vip_runs').update({
       status: 'failed', error_message: err.message
     }).eq('id', runId)
