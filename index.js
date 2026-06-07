@@ -395,6 +395,19 @@ app.post('/run-full-tma', async (req, res) => {
 async function runFullTMA(matric, password, tmaRound, runId, userId) {
   isRunning = true
   let browser = null
+  let tokenDeducted = false
+
+  if (previousRun) {
+  await log(runId, 'Re-run detected — no token charged')
+} else {
+  await supabase.rpc('debit_token_wallet', { p_user_id: userId, p_amount: 1 })
+  await supabase.from('token_transactions').insert({
+    user_id: userId, type: 'debit', amount: 1,
+    description: `Used 1 token for ${tmaRound}`, status: 'success'
+  })
+  await log(runId, 'Token deducted')
+  tokenDeducted = true
+}
 
   const hardTimeout = setTimeout(async () => {
     console.log('Hard timeout reached — forcing cleanup')
@@ -403,8 +416,9 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
     await supabase.from('vip_runs').update({
       status: 'failed', error_message: 'Timed out. Please try again.'
     }).eq('id', runId)
-    await supabase.rpc('credit_token_wallet', { p_user_id: userId, p_amount: 1 })
-  }, 1200000) // 20 minutes
+    if (tokenDeducted) {
+  await supabase.rpc('credit_token_wallet', { p_user_id: userId, p_amount: 1 })
+}, 1200000) // 20 minutes
 
   try {
     await supabase.from('vip_runs').update({ status: 'running' }).eq('id', runId)
@@ -553,8 +567,9 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
     await supabase.from('vip_runs').update({
       status: 'failed', error_message: err.message
     }).eq('id', runId)
-    await supabase.rpc('credit_token_wallet', { p_user_id: userId, p_amount: 1 })
-  }
+    if (tokenDeducted) {
+  await supabase.rpc('credit_token_wallet', { p_user_id: userId, p_amount: 1 })
+}
 }
 
 const PORT = process.env.PORT || 3001
