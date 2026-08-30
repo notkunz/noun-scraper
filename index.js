@@ -609,7 +609,7 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
       tokenDeducted = true;
     }
 
-    await log(runId, "AI is answering questions...");
+    await log(runId, "Scraping and answering questions...");
     const allResults = [];
 
     for (const quiz of quizLinks) {
@@ -659,7 +659,7 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
                 await supabase.from("question_bank").insert({
                   course_id: course.id,
                   question_text: q.questionText,
-                  answer_text: cleanAnswer(answer), // save without letter prefix
+                  answer_text: cleanAnswer(answer),
                   source: "course_material",
                   contributed_by: userId,
                 });
@@ -674,8 +674,8 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
               questionNumber: q.index,
               question: q.questionText,
               options: q.options,
-              answer: answer, // keep full answer for display e.g "A. Environment"
-              answerText: cleanAnswer(answer), // clean version for Supabase e.g "Environment"
+              answer: answer,
+              answerText: cleanAnswer(answer),
               source,
             });
           } catch (groqErr) {
