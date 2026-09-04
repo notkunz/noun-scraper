@@ -20,6 +20,19 @@ const supabase = createClient(
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 let isRunning = false;
 
+async function enterQuizMinimal(page) {
+  try {
+    const startBtn = await page.$('input[name="startattempt"]');
+    if (startBtn) {
+      await startBtn.click();
+      await page.waitForTimeout(4000);
+      console.log("Clicked start, waiting for page...");
+    }
+  } catch (e) {
+    console.log("Could not click start button:", e.message);
+  }
+}
+
 async function launchBrowser() {
   return puppeteer.launch({
     executablePath:
@@ -164,19 +177,6 @@ async function findTMALinks(page, roundNumber) {
 function cleanAnswer(answer) {
   if (!answer) return answer;
   return answer.replace(/^[A-Da-d]\.\s*/, "").trim();
-}
-
-async function enterQuizMinimal(page) {
-  try {
-    const startBtn = await page.$('input[name="startattempt"]');
-    if (startBtn) {
-      await startBtn.click();
-      await page.waitForTimeout(4000);
-      console.log("Clicked start, waiting for page...");
-    }
-  } catch (e) {
-    console.log("Could not click start button:", e.message);
-  }
 }
 
 async function scrapeQuestions(page) {
@@ -575,6 +575,7 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
         await page.waitForTimeout(2000);
 
         await enterQuizMinimal(page);
+        await page.waitForTimeout(2000);
 
         const detectedCode = await page.evaluate(() => {
           const b =
@@ -586,6 +587,7 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
         });
 
         await enterQuizMinimal(page);
+        await page.waitForTimeout(2000);
         const questions = await scrapeQuestions(page);
         await log(
           runId,
