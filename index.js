@@ -56,16 +56,36 @@ async function loginToNOUN(page, matric, password) {
     waitUntil: "domcontentloaded",
     timeout: 30000,
   });
+
+  console.log("On login page, current URL:", page.url());
+
+  // Check if selectors exist
+  const usernameField = await page.$("#username");
+  const passwordField = await page.$("#password");
+  const loginButton = await page.$("#loginbtn");
+  console.log("Username field exists:", !!usernameField);
+  console.log("Password field exists:", !!passwordField);
+  console.log("Login button exists:", !!loginButton);
+
+  if (!usernameField || !passwordField || !loginButton) {
+    console.log("ERROR: Login form selectors not found!");
+    return false;
+  }
+
   await page.type("#username", matric, { delay: 50 });
   await page.type("#password", password, { delay: 50 });
-  await Promise.all([
-    page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30000 }),
-    page.click("#loginbtn"),
-  ]);
-  // Check if still on login page (URL didn't change = login failed)
-  await page.waitForTimeout(2000); // Give page time to redirect
-  const currentUrl = page.url();
-  const loginFailed = currentUrl.includes("login/index.php");
+  console.log("Credentials typed");
+
+  await page.click("#loginbtn");
+  console.log("Login button clicked");
+
+  await page.waitForTimeout(3000);
+  const finalUrl = page.url();
+  console.log("After login, URL:", finalUrl);
+
+  const loginFailed = finalUrl.includes("login/index.php");
+  console.log("Login failed (still on login page):", loginFailed);
+
   return !loginFailed;
 }
 
