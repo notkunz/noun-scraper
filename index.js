@@ -5,6 +5,8 @@ const { createClient } = require("@supabase/supabase-js");
 const Groq = require("groq-sdk");
 const ws = require("ws");
 
+puppeteer.use(StealthPlugin());
+
 const app = express();
 app.use(express.json());
 app.use(cors());
