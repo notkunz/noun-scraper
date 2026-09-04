@@ -20,6 +20,12 @@ const supabase = createClient(
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 let isRunning = false;
 
+const puppeteer = require("puppeteer-core");
+const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+
+// Add stealth plugin BEFORE launching
+puppeteer.use(StealthPlugin());
+
 async function launchBrowser() {
   return puppeteer.launch({
     executablePath:
@@ -72,8 +78,8 @@ async function loginToNOUN(page, matric, password) {
     return false;
   }
 
-  await page.type("#username", matric, { delay: 50 });
-  await page.type("#password", password, { delay: 50 });
+  await page.type("#username", matric, { delay: 100 });
+  await page.type("#password", password, { delay: 100 });
   console.log("Credentials typed");
 
   await page.click("#loginbtn");
