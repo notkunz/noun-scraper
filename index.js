@@ -144,85 +144,17 @@ function cleanAnswer(answer) {
   return answer.replace(/^[A-Da-d]\.\s*/, "").trim();
 }
 
-async function navigateToAttempt(page) {
-  console.log("navigateToAttempt — current URL:", page.url());
-
-  if (!page.url().includes("attempt.php")) {
-    await new Promise((r) => setTimeout(r, 1000));
-
-    const buttons = await page.evaluate(() => {
-      return Array.from(
-        document.querySelectorAll(
-          'input[type="submit"], button[type="submit"], a[href*="attempt"]',
-        ),
-      ).map((el) => ({
-        tag: el.tagName,
-        name: el.name || "",
-        value: el.value || el.innerText?.trim().slice(0, 30),
-        href: el.href || "",
-      }));
-    });
-    console.log("Buttons on page:", JSON.stringify(buttons));
-
+async function enterQuizMinimal(page) {
+  try {
     const startBtn = await page.$('input[name="startattempt"]');
     if (startBtn) {
-      try {
-        await Promise.all([
-          page.waitForNavigation({
-            waitUntil: "domcontentloaded",
-            timeout: 30000,
-          }),
-          startBtn.click(),
-        ]);
-        console.log("After start:", page.url());
-      } catch (e) {
-        console.log("Start click error:", e.message);
-      }
+      await startBtn.click();
+      await page.waitForTimeout(4000);
+      console.log("Clicked start, waiting for page...");
     }
-
-    if (!page.url().includes("attempt.php")) {
-      const confirmBtn = await page.$(
-        'button[type="submit"], input[type="submit"]',
-      );
-      if (confirmBtn) {
-        try {
-          await Promise.all([
-            page.waitForNavigation({
-              waitUntil: "domcontentloaded",
-              timeout: 30000,
-            }),
-            confirmBtn.click(),
-          ]);
-          console.log("After confirm:", page.url());
-        } catch (e) {
-          console.log("Confirm click error:", e.message);
-        }
-      }
-    }
-
-    if (!page.url().includes("attempt.php")) {
-      const continueLink = await page.$('a[href*="attempt.php"]');
-      if (continueLink) {
-        const href = await page.evaluate((a) => a.href, continueLink);
-        await page.goto(href, {
-          waitUntil: "domcontentloaded",
-          timeout: 30000,
-        });
-      }
-    }
+  } catch (e) {
+    console.log("Could not click start button:", e.message);
   }
-
-  // Always go to page 0
-  if (page.url().includes("attempt.php")) {
-    const baseUrl = page.url().split("&page=")[0];
-    await page.goto(`${baseUrl}&page=0`, {
-      waitUntil: "domcontentloaded",
-      timeout: 20000,
-    });
-    await new Promise((r) => setTimeout(r, 1000));
-  }
-
-  console.log("navigateToAttempt done — final URL:", page.url());
 }
 
 async function scrapeQuestions(page) {
@@ -628,7 +560,7 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
           return m ? m[1].replace(/\s+/g, "").toUpperCase() : "UNKNOWN";
         });
 
-        await navigateToAttempt(page);
+        await enterQuizMinimal(page);
         const questions = await scrapeQuestions(page);
         await log(
           runId,
