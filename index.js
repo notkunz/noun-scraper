@@ -5,8 +5,9 @@ const { createClient } = require("@supabase/supabase-js");
 const Groq = require("groq-sdk");
 const ws = require("ws");
 
+// Load stealth AFTER puppeteer is defined
+const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 puppeteer.use(StealthPlugin());
-
 const app = express();
 app.use(express.json());
 app.use(cors());
