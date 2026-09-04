@@ -22,14 +22,31 @@ let isRunning = false;
 
 async function enterQuizMinimal(page) {
   try {
+    console.log(
+      "enterQuizMinimal: Attempting to find and click start button...",
+    );
+
     const startBtn = await page.$('input[name="startattempt"]');
     if (startBtn) {
+      console.log("Found start button with name='startattempt'");
       await startBtn.click();
-      await page.waitForTimeout(4000);
-      console.log("Clicked start, waiting for page...");
+      await page.waitForTimeout(5000); // Increased wait from 4s to 5s
+      console.log("Clicked start, URL now:", page.url());
+    } else {
+      console.log("WARNING: Could not find start button!");
+      // Try alternate selectors
+      const anyButton = await page.$(
+        'input[type="submit"], button[type="submit"]',
+      );
+      if (anyButton) {
+        console.log("Found alternate submit button, clicking...");
+        await anyButton.click();
+        await page.waitForTimeout(5000);
+        console.log("Clicked alternate button, URL now:", page.url());
+      }
     }
   } catch (e) {
-    console.log("Could not click start button:", e.message);
+    console.log("enterQuizMinimal error:", e.message);
   }
 }
 
@@ -586,8 +603,6 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
           return m ? m[1].replace(/\s+/g, "").toUpperCase() : "UNKNOWN";
         });
 
-        await enterQuizMinimal(page);
-        await page.waitForTimeout(2000);
         const questions = await scrapeQuestions(page);
         await log(
           runId,
