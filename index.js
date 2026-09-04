@@ -5,10 +5,6 @@ const { createClient } = require("@supabase/supabase-js");
 const Groq = require("groq-sdk");
 const ws = require("ws");
 
-// Load stealth AFTER puppeteer is defined
-const StealthPlugin = require("puppeteer-extra-plugin-stealth");
-puppeteer.use(StealthPlugin());
-
 const app = express();
 app.use(express.json());
 app.use(cors());
@@ -79,6 +75,7 @@ async function loginToNOUN(page, matric, password) {
   await page.type("#username", matric, { delay: 100 });
   await page.type("#password", password, { delay: 100 });
   console.log("Credentials typed");
+  await page.waitForTimeout(2000); // Wait a bit before clicking
 
   await page.click("#loginbtn");
   console.log("Login button clicked");
