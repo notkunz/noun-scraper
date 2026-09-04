@@ -62,10 +62,11 @@ async function loginToNOUN(page, matric, password) {
     page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30000 }),
     page.click("#loginbtn"),
   ]);
-  const loginError = await page.$(
-    ".loginerrors, .alert-danger, #loginerrormessage",
-  );
-  return !loginError;
+  // Check if still on login page (URL didn't change = login failed)
+  await page.waitForTimeout(2000); // Give page time to redirect
+  const currentUrl = page.url();
+  const loginFailed = currentUrl.includes("login/index.php");
+  return !loginFailed;
 }
 
 async function findTMALinks(page, roundNumber) {
