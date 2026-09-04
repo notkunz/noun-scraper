@@ -572,6 +572,9 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
           waitUntil: "domcontentloaded",
           timeout: 30000,
         });
+        await page.waitForTimeout(2000);
+
+        await enterQuizMinimal(page);
 
         const detectedCode = await page.evaluate(() => {
           const b =
