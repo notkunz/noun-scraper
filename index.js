@@ -8,6 +8,7 @@ const ws = require("ws");
 // Load stealth AFTER puppeteer is defined
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 puppeteer.use(StealthPlugin());
+
 const app = express();
 app.use(express.json());
 app.use(cors());
@@ -22,12 +23,6 @@ const supabase = createClient(
 );
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 let isRunning = false;
-
-const puppeteer = require("puppeteer-core");
-const StealthPlugin = require("puppeteer-extra-plugin-stealth");
-
-// Add stealth plugin BEFORE launching
-puppeteer.use(StealthPlugin());
 
 async function launchBrowser() {
   return puppeteer.launch({
