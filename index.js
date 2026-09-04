@@ -612,7 +612,7 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
         const course = await getCourseFromDB(detectedCode);
         const materialCode = course?.shared_material_code || detectedCode;
 
-        for (const q of questions.slice(0, 10)) {
+        for (const q of questions) {
           try {
             const { answer, source } = await getAnswerForQuestion(
               q.questionText,
