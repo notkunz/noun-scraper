@@ -22,31 +22,29 @@ let isRunning = false;
 
 async function enterQuizMinimal(page) {
   try {
-    console.log(
-      "enterQuizMinimal: Attempting to find and click start button...",
-    );
-
     const startBtn = await page.$('input[name="startattempt"]');
     if (startBtn) {
-      console.log("Found start button with name='startattempt'");
       await startBtn.click();
-      await page.waitForTimeout(5000); // Increased wait from 4s to 5s
-      console.log("Clicked start, URL now:", page.url());
-    } else {
-      console.log("WARNING: Could not find start button!");
-      // Try alternate selectors
-      const anyButton = await page.$(
-        'input[type="submit"], button[type="submit"]',
-      );
-      if (anyButton) {
-        console.log("Found alternate submit button, clicking...");
-        await anyButton.click();
-        await page.waitForTimeout(5000);
-        console.log("Clicked alternate button, URL now:", page.url());
-      }
+      await page.waitForTimeout(4000);
+      console.log("Clicked start, waiting for page...");
     }
   } catch (e) {
-    console.log("enterQuizMinimal error:", e.message);
+    console.log("Could not click start button:", e.message);
+  }
+
+  // Always navigate to page 0 to start from the first question
+  try {
+    if (page.url().includes("attempt.php")) {
+      const baseUrl = page.url().split("&page=")[0];
+      await page.goto(`${baseUrl}&page=0`, {
+        waitUntil: "domcontentloaded",
+        timeout: 20000,
+      });
+      await page.waitForTimeout(1000);
+      console.log("Navigated to page 0, URL:", page.url());
+    }
+  } catch (e) {
+    console.log("Could not navigate to page 0:", e.message);
   }
 }
 
