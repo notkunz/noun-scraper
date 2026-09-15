@@ -22,17 +22,33 @@ let isRunning = false;
 
 async function enterQuizMinimal(page) {
   try {
+    // If already in an attempt, navigate away to reset
+    if (page.url().includes("attempt.php")) {
+      console.log("Already in attempt, navigating away to reset...");
+      await page.goto(
+        page.url().split("/mod/quiz/")[0] +
+          "/mod/quiz/view.php?id=" +
+          new URL(page.url()).searchParams.get("cmid"),
+        {
+          waitUntil: "domcontentloaded",
+          timeout: 15000,
+        },
+      );
+      await page.waitForTimeout(1500);
+    }
+
+    // Now click start attempt
     const startBtn = await page.$('input[name="startattempt"]');
     if (startBtn) {
       await startBtn.click();
       await page.waitForTimeout(4000);
-      console.log("Clicked start, waiting for page...");
+      console.log("Clicked start attempt");
     }
   } catch (e) {
-    console.log("Could not click start button:", e.message);
+    console.log("enterQuizMinimal error:", e.message);
   }
 
-  // Always navigate to page 0 to start from the first question
+  // Navigate to page 0
   try {
     if (page.url().includes("attempt.php")) {
       const baseUrl = page.url().split("&page=")[0];
@@ -41,7 +57,7 @@ async function enterQuizMinimal(page) {
         timeout: 20000,
       });
       await page.waitForTimeout(1000);
-      console.log("Navigated to page 0, URL:", page.url());
+      console.log("At page 0, URL:", page.url());
     }
   } catch (e) {
     console.log("Could not navigate to page 0:", e.message);
