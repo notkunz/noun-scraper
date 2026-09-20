@@ -22,53 +22,45 @@ let isRunning = false;
 
 async function enterQuizMinimal(page) {
   try {
-    // If in an attempt, try to abandon it
+    // If already in an attempt, navigate away to reset
     if (page.url().includes("attempt.php")) {
-      console.log("In active attempt, looking for abandon button...");
-
-      // Click finish/abandon button if it exists
-      const abandonBtn = await page.$(
-        'input[name="finishattempt"], a[href*="abandon"], button:contains("Abandon")',
-      );
-
-      if (abandonBtn) {
-        await abandonBtn.click();
-        await page.waitForTimeout(2000);
-        console.log("Clicked abandon/finish button");
-      }
-    }
-
-    // Navigate to quiz view page to reset
-    const cmid = new URL(page.url()).searchParams.get("cmid");
-    if (cmid) {
+      console.log("Already in attempt, navigating away to reset...");
       await page.goto(
-        `https://elearn.nou.edu.ng/mod/quiz/view.php?id=${cmid}`,
+        page.url().split("/mod/quiz/")[0] +
+          "/mod/quiz/view.php?id=" +
+          new URL(page.url()).searchParams.get("cmid"),
         {
           waitUntil: "domcontentloaded",
           timeout: 15000,
         },
       );
       await page.waitForTimeout(1500);
-      console.log("Reset to quiz view page");
     }
 
-    // NOW click start attempt fresh
+    // Now click start attempt
     const startBtn = await page.$('input[name="startattempt"]');
     if (startBtn) {
       await startBtn.click();
       await page.waitForTimeout(4000);
-      console.log("Started fresh attempt");
+      console.log("Clicked start attempt");
     }
-
-    // Go to page 0
-    await page.goto(page.url().split("&page=")[0] + "&page=0", {
-      waitUntil: "domcontentloaded",
-      timeout: 15000,
-    });
-    await page.waitForTimeout(1000);
-    console.log("At page 0");
   } catch (e) {
     console.log("enterQuizMinimal error:", e.message);
+  }
+
+  // Navigate to page 0
+  try {
+    if (page.url().includes("attempt.php")) {
+      const baseUrl = page.url().split("&page=")[0];
+      await page.goto(`${baseUrl}&page=0`, {
+        waitUntil: "domcontentloaded",
+        timeout: 20000,
+      });
+      await page.waitForTimeout(1000);
+      console.log("At page 0, URL:", page.url());
+    }
+  } catch (e) {
+    console.log("Could not navigate to page 0:", e.message);
   }
 }
 
