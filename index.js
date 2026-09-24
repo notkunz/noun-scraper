@@ -373,16 +373,16 @@ async function getCourseFromDB(courseCode) {
 
 async function log(runId, message) {
   console.log(message);
-  await supabase
-    .from("vip_runs")
-    .update({
-      status_log: supabase.rpc("append_log", {
-        p_id: runId,
-        p_message: message,
-      }),
-    })
-    .eq("id", runId)
-    .catch((_) => {});
+  try {
+    await supabase
+      .from("vip_runs")
+      .update({
+        status_log: message,
+      })
+      .eq("id", runId);
+  } catch (e) {
+    console.error("Log error:", e.message);
+  }
 }
 
 app.post("/run-full-tma", async (req, res) => {
