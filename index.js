@@ -1,5 +1,5 @@
 const express = require("express");
-const puppeteer = require("puppeteer-core");
+const { chromium } = require("playwright");
 const cors = require("cors");
 const { createClient } = require("@supabase/supabase-js");
 const Groq = require("groq-sdk");
@@ -65,33 +65,28 @@ async function enterQuizMinimal(page) {
 }
 
 async function launchBrowser() {
-  return puppeteer.launch({
-    executablePath:
-      process.env.PUPPETEER_EXECUTABLE_PATH || "/usr/bin/chromium",
+  return chromium.launch({
     headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--single-process",
-      "--js-flags=--max-old-space-size=256",
-    ],
+    args: ["--disable-blink-features=AutomationControlled"],
   });
 }
 
 async function setupPage(browser) {
-  const page = await browser.newPage();
-  await page.setRequestInterception(true);
-  page.on("request", (r) => {
-    if (["image", "stylesheet", "font", "media"].includes(r.resourceType()))
-      r.abort();
-    else r.continue();
+  const page = await browser.newPage({
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    viewport: { width: 1280, height: 800 },
   });
-  await page.setUserAgent(
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-  );
-  await page.setViewport({ width: 1280, height: 800 });
+
+  // Block images, stylesheets, fonts, media
+  await page.route("**/*", (route) => {
+    const resourceType = route.request().resourceType();
+    if (["image", "stylesheet", "font", "media"].includes(resourceType)) {
+      route.abort();
+    } else {
+      route.continue();
+    }
+  });
+
   return page;
 }
 
@@ -102,7 +97,6 @@ async function loginToNOUN(page, matric, password) {
   });
   console.log("Received matric:", `"${matric}"`, "password:", `"${password}"`);
 
-  console.log("On login page, current URL:", page.url());
   console.log("On login page, current URL:", page.url());
 
   // Check if selectors exist
@@ -118,22 +112,11 @@ async function loginToNOUN(page, matric, password) {
     return false;
   }
 
-  await page.evaluate(
-    (matric, password) => {
-      const usernameField = document.querySelector("#username");
-      const passwordField = document.querySelector("#password");
-      if (usernameField) usernameField.value = matric;
-      if (passwordField) passwordField.value = password;
-      if (usernameField)
-        usernameField.dispatchEvent(new Event("change", { bubbles: true }));
-      if (passwordField)
-        passwordField.dispatchEvent(new Event("change", { bubbles: true }));
-    },
-    matric,
-    password,
-  );
+  // Use Playwright's fill() instead of evaluate()
+  await page.fill("#username", matric);
+  await page.fill("#password", password);
 
-  console.log("Credentials injected via JavaScript");
+  console.log("Credentials filled via Playwright");
   await page.waitForTimeout(1000);
 
   await page.click("#loginbtn");
@@ -219,7 +202,7 @@ async function findTMALinks(page, roundNumber) {
   return { quizLinks, totalCourses: courseLinks.length };
 }
 
-// Helper to clean answer text — removes "A. " or "a. " prefix
+// Helper to clean answer text
 function cleanAnswer(answer) {
   if (!answer) return answer;
   return answer.replace(/^[A-Da-d]\.\s*/, "").trim();
@@ -250,13 +233,11 @@ async function scrapeQuestions(page) {
       const qs = [];
 
       qEls.forEach((el, idx) => {
-        // Try .qtext/.formulation first
         let questionText =
           el
             .querySelector(".qtext, .questiontext, .formulation")
             ?.innerText?.trim() || "";
 
-        // Fallback: remove .info and get remaining text
         if (!questionText) {
           const clone = el.cloneNode(true);
           clone.querySelector(".info")?.remove();
@@ -268,222 +249,141 @@ async function scrapeQuestions(page) {
 
         const opts = [];
         el.querySelectorAll(
-          ".answer div.r0, .answer div.r1, .answer label",
-        ).forEach((o) => {
-          const oc = o.cloneNode(true);
-          oc.querySelectorAll("input, .answernumber").forEach((e) =>
-            e.remove(),
-          );
-          const t = oc.innerText?.trim();
-          if (t && t.length > 0 && !t.match(/^[a-d]\.?$/i)) opts.push(t);
+          'label[for*="answer"], .answer label, .answeroption label',
+        ).forEach((label) => {
+          const text = label.innerText?.trim();
+          if (text) opts.push(text);
         });
 
-        if (questionText && questionText.length > 5) {
-          qs.push({ questionText, options: opts, index: si + idx });
+        if (questionText) {
+          qs.push({
+            index: idx + 1,
+            questionText,
+            options: opts,
+          });
         }
       });
 
       return qs;
-    }, qi);
+    });
 
-    console.log(`Page ${qi}: extracted ${pqs.length} questions`);
-    questions.push(...pqs);
-    qi += pqs.length;
+    if (pqs.length > 0) {
+      console.log(`Page ${qi}: extracted ${pqs.length} questions`);
+      questions.push(...pqs);
+      qi++;
+    }
 
-    const nextBtn = await page.$('input[name="next"], .mod_quiz-next-nav');
-    if (nextBtn && pqs.length > 0) {
-      await Promise.all([
-        page.waitForNavigation({
-          waitUntil: "domcontentloaded",
-          timeout: 15000,
-        }),
-        nextBtn.click(),
-      ]);
-      await new Promise((r) => setTimeout(r, 1000));
-    } else {
-      hasNext = false;
+    const nextBtn = await page.$(
+      'input[name="next"], button[name="next"], a[href*="page=' + qi + '"]',
+    );
+    hasNext = !!nextBtn;
+
+    if (hasNext) {
+      if (nextBtn) {
+        await nextBtn.click();
+        await page.waitForTimeout(2000);
+      }
     }
   }
 
   return questions;
 }
 
+async function getAnswerForQuestion(
+  questionText,
+  options,
+  courseCode,
+  courseId,
+) {
+  try {
+    // Search course materials first
+    const { data: materialChunks } = await supabase
+      .from("shared_material_chunks")
+      .select("chunk_text")
+      .eq("course_code", courseCode)
+      .limit(5);
+
+    const { data: qbItems } = await supabase
+      .from("question_bank")
+      .select("answer_text")
+      .eq("course_id", courseId)
+      .ilike("question_text", `%${questionText.slice(0, 50)}%`)
+      .limit(3);
+
+    const foundChunks =
+      materialChunks?.filter((c) =>
+        c.chunk_text
+          .toLowerCase()
+          .includes(questionText.slice(0, 30).toLowerCase()),
+      ) || [];
+
+    if (qbItems && qbItems.length > 0) {
+      return {
+        answer: qbItems[0].answer_text || "",
+        source: "question_bank",
+        match_percentage: 99,
+      };
+    }
+
+    if (foundChunks.length > 0) {
+      const context = foundChunks.map((c) => c.chunk_text).join("\n\n");
+      const prompt = `Given this course material:\n${context}\n\nAnswer this question: ${questionText}\n\nOptions: ${options.join(", ")}\n\nProvide only the best answer without explanation.`;
+
+      const message = await groq.messages.create({
+        model: "mixtral-8x7b-32768",
+        max_tokens: 100,
+        messages: [{ role: "user", content: prompt }],
+      });
+
+      return {
+        answer:
+          message.content[0].type === "text" ? message.content[0].text : "",
+        source: "course_material",
+        match_percentage: Math.min(95, 60 + foundChunks.length * 5),
+      };
+    }
+
+    // Fallback to Groq
+    const prompt = `Answer this question: ${questionText}\n\nOptions: ${options.join(", ")}\n\nProvide only the best answer.`;
+    const message = await groq.messages.create({
+      model: "mixtral-8x7b-32768",
+      max_tokens: 100,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    return {
+      answer: message.content[0].type === "text" ? message.content[0].text : "",
+      source: "internet",
+      match_percentage: 0,
+    };
+  } catch (err) {
+    console.error("Answer error:", err.message);
+    return { answer: "", source: "not_found", match_percentage: 0 };
+  }
+}
+
 async function getCourseFromDB(courseCode) {
   const { data } = await supabase
     .from("courses")
-    .select("id, shared_material_code, course_code")
-    .or(
-      `course_code.ilike.%${courseCode}%,course_code.ilike.%${courseCode.replace(/([A-Z]+)(\d+)/, "$1 $2")}%`,
-    )
-    .limit(1)
+    .select("id, shared_material_code")
+    .eq("course_code", courseCode)
     .single();
   return data;
 }
 
-async function getAnswerForQuestion(
-  questionText,
-  options,
-  materialCode,
-  courseId,
-) {
-  if (courseId) {
-    const { data: bank } = await supabase
-      .from("question_bank")
-      .select("answer_text")
-      .eq("course_id", courseId)
-      .ilike("question_text", `%${questionText.slice(0, 60)}%`)
-      .limit(1)
-      .single();
-    if (bank) return { answer: bank.answer_text, source: "question_bank" };
-  }
-
-  const words = questionText
-    .replace(/[^a-zA-Z\s]/g, " ")
-    .split(" ")
-    .filter((w) => w.length > 2);
-  const phrases = [...words];
-  for (let i = 0; i < words.length - 1; i++)
-    phrases.push(`${words[i]} ${words[i + 1]}`);
-  for (let i = 0; i < words.length - 2; i++)
-    phrases.push(`${words[i]} ${words[i + 1]} ${words[i + 2]}`);
-
-  const chunkSet = new Set();
-  for (const phrase of phrases.slice(0, 15)) {
-    if (chunkSet.size >= 4) break;
-    const { data: matched } = await supabase
-      .from("shared_material_chunks")
-      .select("chunk_text")
-      .eq("course_code", materialCode)
-      .ilike("chunk_text", `%${phrase}%`)
-      .limit(2);
-    if (matched?.length) matched.forEach((m) => chunkSet.add(m.chunk_text));
-  }
-
-  const materialContext = Array.from(chunkSet).join("\n\n---\n\n");
-  const hasMaterial = materialContext.length > 0;
-  const optionsText = options
-    .map((o, i) => `${String.fromCharCode(65 + i)}. ${o}`)
-    .join("\n");
-
-  const result = await groq.chat.completions.create({
-    model: "openai/gpt-oss-120b",
-    messages: [
-      {
-        role: "user",
-        content: `You are a NOUN TMA assistant.
-${hasMaterial ? `COURSE MATERIAL:\n${materialContext}\n\n` : ""}
-QUESTION: "${questionText}"
-${optionsText ? `OPTIONS:\n${optionsText}` : ""}
-
-RULES:
-1. Find the answer in the course material
-2. For fill-in-blank find the sentence with those words completed
-3. Match to the closest option
-4. Reply ONLY with the letter and option text e.g "B. Success"
-5. If not found reply: ANSWER_NOT_FOUND`,
-      },
-    ],
-    max_tokens: 256,
-  });
-
-  const answer =
-    result.choices[0]?.message?.content?.trim() || "ANSWER_NOT_FOUND";
-  return {
-    answer: answer === "ANSWER_NOT_FOUND" ? "" : answer,
-    source:
-      answer === "ANSWER_NOT_FOUND"
-        ? "not_found"
-        : hasMaterial
-          ? "course_material"
-          : "internet",
-  };
-}
-
 async function log(runId, message) {
   console.log(message);
-  try {
-    await supabase.rpc("append_run_log", {
-      p_run_id: runId,
-      p_message: message,
-    });
-  } catch (e) {}
+  await supabase
+    .from("vip_runs")
+    .update({
+      status_log: supabase.rpc("append_log", {
+        p_id: runId,
+        p_message: message,
+      }),
+    })
+    .eq("id", runId)
+    .catch((_) => {});
 }
-
-app.get("/", (req, res) => {
-  res.json({ status: "NOUN Scraper running" });
-});
-
-app.post("/scrape-tma", async (req, res) => {
-  const { matric, password, secret, tma_round } = req.body;
-  if (secret !== SECRET_KEY)
-    return res.status(401).json({ error: "Unauthorized" });
-  if (!matric || !password)
-    return res.status(400).json({ error: "Matric and password required" });
-
-  const roundNumber = tma_round?.replace("TMA", "") || "1";
-  let browser = null;
-
-  try {
-    browser = await launchBrowser();
-    const page = await setupPage(browser);
-
-    const loggedIn = await loginToNOUN(page, matric, password);
-    if (!loggedIn) {
-      await browser.close();
-      return res.status(401).json({ error: "Invalid NOUN credentials." });
-    }
-
-    const { quizLinks } = await findTMALinks(page, roundNumber);
-
-    if (quizLinks.length === 0) {
-      await browser.close();
-      return res.json({
-        success: true,
-        quizzes: [],
-        message: `No TMA${roundNumber} found`,
-      });
-    }
-
-    const results = [];
-    for (const quiz of quizLinks) {
-      try {
-        await page.goto(quiz.href, {
-          waitUntil: "domcontentloaded",
-          timeout: 30000,
-        });
-        const courseCode = await page.evaluate(() => {
-          const b =
-            document.querySelector(".breadcrumb")?.innerText ||
-            document.title ||
-            "";
-          const m = b.match(/([A-Z]{2,4}\s*\d{3})/i);
-          return m ? m[1].replace(/\s+/g, "").toUpperCase() : "UNKNOWN";
-        });
-        await navigateToAttempt(page);
-        const questions = await scrapeQuestions(page);
-        if (questions.length > 0) {
-          results.push({
-            title: quiz.text,
-            course_code: courseCode,
-            url: quiz.href,
-            questions,
-          });
-        }
-      } catch (e) {
-        console.error("Quiz error:", e.message);
-      }
-    }
-
-    await browser.close();
-    return res.json({ success: true, quizzes: results });
-  } catch (err) {
-    if (browser)
-      try {
-        await browser.close();
-      } catch (_) {}
-    return res.status(500).json({ error: "Scraping failed: " + err.message });
-  }
-});
 
 app.post("/run-full-tma", async (req, res) => {
   const { matric, password, secret, tma_round, run_id, user_id } = req.body;
@@ -656,7 +556,8 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
                 .select("id")
                 .eq("course_id", course.id)
                 .ilike("question_text", `%${q.questionText.slice(0, 80)}%`)
-                .single();
+                .single()
+                .catch(() => ({ data: null }));
 
               if (!existing) {
                 await supabase.from("question_bank").insert({
@@ -735,7 +636,7 @@ async function runFullTMA(matric, password, tmaRound, runId, userId) {
   }
 }
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`NOUN Scraper running on port ${PORT}`);
 });
