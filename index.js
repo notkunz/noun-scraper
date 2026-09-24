@@ -24,41 +24,28 @@ async function enterQuizMinimal(page) {
   try {
     console.log("enterQuizMinimal: Current URL:", page.url());
 
-    // Make sure we're on view page
-    if (!page.url().includes("view.php")) {
-      console.log("Not on view.php, skipping start button");
+    // Check if questions already visible
+    const questionCount = await page.evaluate(
+      () => document.querySelectorAll(".que").length,
+    );
+    console.log("Questions already visible:", questionCount);
+
+    if (questionCount > 0) {
+      console.log("Questions found, no need to click start");
       return;
     }
 
-    // Wait for and click start button
-    try {
-      console.log("Waiting for start button...");
-      await page.waitForSelector('input[name="startattempt"]', {
-        timeout: 5000,
-      });
-      console.log("Found start button, clicking...");
-
-      await page.click('input[name="startattempt"]');
-      console.log("Clicked start button");
-
-      // Wait for navigation to attempt.php
-      await page.waitForURL("**/attempt.php**", { timeout: 10000 });
-      console.log("Successfully navigated to attempt.php, URL:", page.url());
-    } catch (e) {
-      console.log("Start button click failed or timed out:", e.message);
-      return;
-    }
-
-    // Navigate to page 0
-    try {
-      const baseUrl = page.url().split("&page=")[0];
-      await page.goto(`${baseUrl}&page=0`, {
-        waitUntil: "domcontentloaded",
-        timeout: 10000,
-      });
-      console.log("Navigated to page 0");
-    } catch (e) {
-      console.log("Page 0 navigation error:", e.message);
+    // If no questions, try clicking any button that might start the attempt
+    const btn = await page.$("input[type='submit'], button");
+    if (btn) {
+      const btnText = await page.evaluate(
+        (el) => el.innerText || el.value,
+        btn,
+      );
+      console.log("Clicking button:", btnText);
+      await btn.click();
+      await page.waitForTimeout(3000);
+      console.log("After click, URL:", page.url());
     }
   } catch (e) {
     console.log("enterQuizMinimal error:", e.message);
@@ -76,16 +63,6 @@ async function setupPage(browser) {
   const page = await browser.newPage({
     userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     viewport: { width: 1280, height: 800 },
-  });
-
-  // Block images, stylesheets, fonts, media
-  await page.route("**/*", (route) => {
-    const resourceType = route.request().resourceType();
-    if (["image", "stylesheet", "font", "media"].includes(resourceType)) {
-      route.abort();
-    } else {
-      route.continue();
-    }
   });
 
   return page;
