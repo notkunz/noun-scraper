@@ -100,14 +100,9 @@ async function loginToNOUN(page, matric, password) {
     waitUntil: "domcontentloaded",
     timeout: 30000,
   });
-    console.log(
-      "Received matric:",
-      `"${matric}"`,
-      "password:",
-      `"${password}"`,
-    );
+  console.log("Received matric:", `"${matric}"`, "password:", `"${password}"`);
 
-    console.log("On login page, current URL:", page.url());
+  console.log("On login page, current URL:", page.url());
   console.log("On login page, current URL:", page.url());
 
   // Check if selectors exist
@@ -123,10 +118,23 @@ async function loginToNOUN(page, matric, password) {
     return false;
   }
 
-  await page.type("#username", matric, { delay: 100 });
-  await page.type("#password", password, { delay: 100 });
-  console.log("Credentials typed");
-  await page.waitForTimeout(2000); // Wait a bit before clicking
+  await page.evaluate(
+    (matric, password) => {
+      const usernameField = document.querySelector("#username");
+      const passwordField = document.querySelector("#password");
+      if (usernameField) usernameField.value = matric;
+      if (passwordField) passwordField.value = password;
+      if (usernameField)
+        usernameField.dispatchEvent(new Event("change", { bubbles: true }));
+      if (passwordField)
+        passwordField.dispatchEvent(new Event("change", { bubbles: true }));
+    },
+    matric,
+    password,
+  );
+
+  console.log("Credentials injected via JavaScript");
+  await page.waitForTimeout(1000);
 
   await page.click("#loginbtn");
   console.log("Login button clicked");
