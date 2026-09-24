@@ -22,45 +22,46 @@ let isRunning = false;
 
 async function enterQuizMinimal(page) {
   try {
-    // If already in an attempt, navigate away to reset
-    if (page.url().includes("attempt.php")) {
-      console.log("Already in attempt, navigating away to reset...");
-      await page.goto(
-        page.url().split("/mod/quiz/")[0] +
-          "/mod/quiz/view.php?id=" +
-          new URL(page.url()).searchParams.get("cmid"),
-        {
-          waitUntil: "domcontentloaded",
-          timeout: 15000,
-        },
-      );
-      await page.waitForTimeout(1500);
+    console.log("enterQuizMinimal: Current URL:", page.url());
+
+    // Make sure we're on view page
+    if (!page.url().includes("view.php")) {
+      console.log("Not on view.php, skipping start button");
+      return;
     }
 
-    // Now click start attempt
-    const startBtn = await page.$('input[name="startattempt"]');
-    if (startBtn) {
-      await startBtn.click();
-      await page.waitForTimeout(4000);
-      console.log("Clicked start attempt");
-    }
-  } catch (e) {
-    console.log("enterQuizMinimal error:", e.message);
-  }
+    // Wait for and click start button
+    try {
+      console.log("Waiting for start button...");
+      await page.waitForSelector('input[name="startattempt"]', {
+        timeout: 5000,
+      });
+      console.log("Found start button, clicking...");
 
-  // Navigate to page 0
-  try {
-    if (page.url().includes("attempt.php")) {
+      await page.click('input[name="startattempt"]');
+      console.log("Clicked start button");
+
+      // Wait for navigation to attempt.php
+      await page.waitForURL("**/attempt.php**", { timeout: 10000 });
+      console.log("Successfully navigated to attempt.php, URL:", page.url());
+    } catch (e) {
+      console.log("Start button click failed or timed out:", e.message);
+      return;
+    }
+
+    // Navigate to page 0
+    try {
       const baseUrl = page.url().split("&page=")[0];
       await page.goto(`${baseUrl}&page=0`, {
         waitUntil: "domcontentloaded",
-        timeout: 20000,
+        timeout: 10000,
       });
-      await page.waitForTimeout(1000);
-      console.log("At page 0, URL:", page.url());
+      console.log("Navigated to page 0");
+    } catch (e) {
+      console.log("Page 0 navigation error:", e.message);
     }
   } catch (e) {
-    console.log("Could not navigate to page 0:", e.message);
+    console.log("enterQuizMinimal error:", e.message);
   }
 }
 
