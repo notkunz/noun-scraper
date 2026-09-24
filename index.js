@@ -100,7 +100,14 @@ async function loginToNOUN(page, matric, password) {
     waitUntil: "domcontentloaded",
     timeout: 30000,
   });
+    console.log(
+      "Received matric:",
+      `"${matric}"`,
+      "password:",
+      `"${password}"`,
+    );
 
+    console.log("On login page, current URL:", page.url());
   console.log("On login page, current URL:", page.url());
 
   // Check if selectors exist
